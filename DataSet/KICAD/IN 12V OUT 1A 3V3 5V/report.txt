@@ -1,2 +1,0 @@
-Plot: "C:\Users\user\Documents\LEARNING\Kicad 2021\IN 12V OUT 1A 3V3 5V\power supply.pdf" OK.
-
