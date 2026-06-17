@@ -1,0 +1,18 @@
+*.kicad_pcb
+*.kicad_pro
+*.kicad_prl
+*.kicad_sch
+*.kicad_sym
+*.kicad_mod
+*.kicad_dru
+*.kicad_wks
+*.kicad_jobset
+*.pretty/
+*.3dshapes/
+*.lib
+*.dcm
+*.net
+*.erc
+*.bak
+*.zip
+!DataSet/KICAD/Arduino hat/Arduino_hat.kicad_pcb

@@ -1,0 +1,5 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "Arduino_hat-rescue") (type "Legacy") (uri "${KIPRJMOD}/Arduino_hat-rescue.lib") (options "") (descr ""))
+	(lib (name "Arduino_hat-cache") (type "Legacy") (uri "C:/Users/Ryant/Documents/Simulith/Simulith Data/KICAD/Arduino hat/Arduino_hat-cache.lib") (options "") (descr "Legacy project cache library"))
+)
