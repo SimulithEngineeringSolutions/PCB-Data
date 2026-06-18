@@ -66,6 +66,19 @@ class OutlineData:
 
 
 @dataclass(slots=True)
+class ZoneContourData:
+    exterior_mm: list[PointMM]
+    holes_mm: list[list[PointMM]]
+
+
+@dataclass(slots=True)
+class ZoneData:
+    layer: str
+    net: str
+    contours: list[ZoneContourData]
+
+
+@dataclass(slots=True)
 class StackupCopperLayer:
     name: str
     thickness_mm: float
@@ -97,6 +110,7 @@ class CopperPathsExport:
     tracks: list[TrackData]
     vias: list[ViaData]
     pads: list[PadData]
+    zones: list[ZoneData]
     outline: list[OutlineData]
     nets: list[str]
     stackup: StackupData
@@ -177,6 +191,39 @@ def copper_layer_sort_key(layer_name: str) -> tuple[int, int]:
     return (3, 0)
 
 
+def point_from_vec(pcbnew: Any, point: Any) -> PointMM:
+    return PointMM(x_mm=to_mm(pcbnew, point.x), y_mm=to_mm(pcbnew, point.y))
+
+
+def line_chain_points_mm(pcbnew: Any, chain: Any) -> list[PointMM]:
+    point_count = chain.PointCount() if hasattr(chain, "PointCount") else chain.GetPointCount()
+    points = [point_from_vec(pcbnew, chain.GetPoint(index)) for index in range(point_count)]
+    if len(points) > 1 and abs(points[0].x_mm - points[-1].x_mm) < 1e-6 and abs(points[0].y_mm - points[-1].y_mm) < 1e-6:
+        points.pop()
+    return points
+
+
+def extract_zone_contours_for_layer(pcbnew: Any, zone: Any, layer_id: int) -> list[ZoneContourData]:
+    if hasattr(zone, "HasFilledPolysForLayer") and not zone.HasFilledPolysForLayer(layer_id):
+        return []
+    polyset = zone.GetFilledPolysList(layer_id)
+    if hasattr(polyset, "IsEmpty") and polyset.IsEmpty():
+        return []
+
+    contours: list[ZoneContourData] = []
+    for outline_index in range(polyset.OutlineCount()):
+        exterior = line_chain_points_mm(pcbnew, polyset.Outline(outline_index))
+        if len(exterior) < 3:
+            continue
+        holes: list[list[PointMM]] = []
+        for hole_index in range(polyset.HoleCount(outline_index)):
+            hole_points = line_chain_points_mm(pcbnew, polyset.Hole(outline_index, hole_index))
+            if len(hole_points) >= 3:
+                holes.append(hole_points)
+        contours.append(ZoneContourData(exterior_mm=exterior, holes_mm=holes))
+    return contours
+
+
 def build_stackup(active_layers: list[str], board_thickness_mm: float) -> StackupData:
     if active_layers == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"] and abs(board_thickness_mm - 1.6) <= 0.01:
         return StackupData(
@@ -236,6 +283,7 @@ def export_copper_paths(input_path: Path, output_path: Path) -> None:
     tracks: list[TrackData] = []
     vias: list[ViaData] = []
     pads: list[PadData] = []
+    zones: list[ZoneData] = []
     outline: list[OutlineData] = []
     nets: set[str] = set()
 
@@ -307,6 +355,24 @@ def export_copper_paths(input_path: Path, output_path: Path) -> None:
                 if pad_data.net:
                     nets.add(pad_data.net)
 
+    board_zones = list(board.Zones()) if hasattr(board, "Zones") else list(board.GetZones())
+    for zone in board_zones:
+        if hasattr(zone, "GetIsRuleArea") and zone.GetIsRuleArea():
+            continue
+        zone_net = str(zone.GetNetname() or "")
+        for layer_id in range(64):
+            layer_name = str(pcbnew.LayerName(layer_id))
+            if layer_name not in active_layers:
+                continue
+            if not zone.IsOnLayer(layer_id):
+                continue
+            contours = extract_zone_contours_for_layer(pcbnew, zone, layer_id)
+            if not contours:
+                continue
+            zones.append(ZoneData(layer=layer_name, net=zone_net, contours=contours))
+            if zone_net:
+                nets.add(zone_net)
+
     edge_cuts = pcbnew.Edge_Cuts
     for drawing in board.GetDrawings():
         if drawing.GetLayer() != edge_cuts:
@@ -356,6 +422,7 @@ def export_copper_paths(input_path: Path, output_path: Path) -> None:
         tracks=tracks,
         vias=vias,
         pads=pads,
+        zones=zones,
         outline=outline,
         nets=sorted(nets),
         stackup=build_stackup(sorted(active_layers, key=copper_layer_sort_key), board_thickness_mm),

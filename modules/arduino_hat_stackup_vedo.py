@@ -42,8 +42,8 @@ DEFECT_COLORS = {
 DIELECTRIC_COLOR = "#315f52"
 OUTLINE_COLOR = "#232323"
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EXPORTER_SCRIPT = REPO_ROOT / "export_kicad_copper_paths.py"
-SOURCE_PCB = REPO_ROOT / "dataset" / "Kicad" / "Arduino hat" / "Arduino_hat.kicad_pcb"
+EXPORTER_SCRIPT = REPO_ROOT / "modules" / "export_kicad_copper_paths.py"
+SOURCE_PCB = REPO_ROOT / "DataSet" / "KICAD" / "Arduino hat" / "Arduino_hat.kicad_pcb"
 DEFAULT_INPUT = REPO_ROOT / "output" / "arduino_hat" / "copper_paths.json"
 COMMON_KICAD_PYTHON_PATHS = (
     Path(r"C:\Program Files\KiCad\10.0\bin\python.exe"),
@@ -51,6 +51,18 @@ COMMON_KICAD_PYTHON_PATHS = (
     Path(r"C:\Program Files\KiCad\8.0\bin\python.exe"),
 )
 DEFAULT_EXPORT_DIR = REPO_ROOT / "output" / "arduino_hat" / "material_partition_live"
+EXPORT_OPTION_LABELS = [
+    ("copper_layers", "Copper layer STLs"),
+    ("trace_layers", "Trace layer STLs"),
+    ("via_barrels", "Via barrel STL"),
+    ("pad_barrels", "Pad barrel STL"),
+    ("copper_all", "Combined copper STL"),
+    ("trace_all", "Combined trace STL"),
+    ("via_air", "Via air STL"),
+    ("pad_air", "Pad air STL"),
+    ("dielectric_layers", "Dielectric layer STLs"),
+    ("pcb_parts_all", "Combined PCB parts STL"),
+]
 
 
 @dataclass(slots=True)
@@ -101,6 +113,19 @@ class OutlineData:
 
 
 @dataclass(slots=True)
+class ZoneContourData:
+    exterior_mm: list[PointMM]
+    holes_mm: list[list[PointMM]]
+
+
+@dataclass(slots=True)
+class ZoneData:
+    layer: str
+    net: str
+    contours: list[ZoneContourData]
+
+
+@dataclass(slots=True)
 class StackupCopperLayer:
     name: str
     thickness_mm: float
@@ -131,6 +156,7 @@ class BoardViewModel:
     tracks: list[TrackData]
     vias: list[ViaData]
     pads: list[PadData]
+    zones: list[ZoneData]
     outline: list[OutlineData]
     active_layers: list[str]
     nets: list[str]
@@ -242,9 +268,222 @@ class ExportRefreshError(RuntimeError):
     pass
 
 
+def export_material_partition_with_defects(
+    model: BoardViewModel,
+    output_dir: Path = DEFAULT_EXPORT_DIR,
+    *,
+    overetch: OverEtchSettings | None = None,
+    mousebite: MouseBiteSettings | None = None,
+    underetch: UnderEtchSettings | None = None,
+    opencircuit: OpenCircuitSettings | None = None,
+    shortcircuit: ShortCircuitSettings | None = None,
+) -> Path:
+    track_paths_by_layer = {
+        layer: build_connected_track_paths(
+            model,
+            [track for track in model.tracks if track.layer == layer],
+        )
+        for layer in model.active_layers
+    }
+    defects_by_layer = build_all_defects_by_layer(
+        track_paths_by_layer,
+        overetch or OverEtchSettings(),
+        mousebite or MouseBiteSettings(),
+        underetch or UnderEtchSettings(),
+        opencircuit or OpenCircuitSettings(),
+        shortcircuit or ShortCircuitSettings(),
+    )
+    z_map = build_z_map(
+        board_thickness_mm=model.board_thickness_mm,
+        stackup=model.stackup,
+        copper_layers=model.active_layers,
+        explode_scale=1.0,
+    )
+    return export_partition_from_state(
+        model=model,
+        output_dir=output_dir,
+        track_paths_by_layer=track_paths_by_layer,
+        defects_by_layer=defects_by_layer,
+        z_map=z_map,
+    )
+
+
+def export_partition_from_state(
+    *,
+    model: BoardViewModel,
+    output_dir: Path,
+    track_paths_by_layer: dict[str, list[tuple[list[tuple[float, float]], float]]],
+    defects_by_layer: dict[str, list[TraceDefect]],
+    z_map: dict[str, float],
+    selected_outputs: set[str] | None = None,
+) -> Path:
+    selected_outputs = set(selected_outputs or {name for name, _label in EXPORT_OPTION_LABELS})
+    output_dir = output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    board_polygon = build_board_polygon(model)
+    mesh_records: list[MeshRecord] = []
+    copper_meshes: list[trimesh.Trimesh] = []
+    trace_meshes: list[trimesh.Trimesh] = []
+    layer_mesh_by_name: dict[str, trimesh.Trimesh] = {}
+    partition_meshes: list[trimesh.Trimesh] = []
+
+    for layer_name in model.active_layers:
+        copper_thickness_mm = copper_thickness_for_layer(model, layer_name)
+        trace_geometry = create_layer_copper_polygon(
+            model=model,
+            layer_name=layer_name,
+            track_paths=track_paths_by_layer.get(layer_name, []),
+            defects=defects_by_layer.get(layer_name, []),
+            include_zones=False,
+            include_tracks=True,
+            include_pads=False,
+        )
+        trace_mesh = extrude_geometry(
+            trace_geometry,
+            height_mm=copper_thickness_mm,
+            z_bottom_mm=z_map[layer_name] - (copper_thickness_mm / 2.0),
+        )
+        if trace_mesh is not None:
+            trace_meshes.append(trace_mesh)
+            if "trace_layers" in selected_outputs:
+                trace_path = output_dir / f"trace_{layer_name.replace('.', '_')}.stl"
+                trace_mesh.export(trace_path)
+                mesh_records.append(MeshRecord(name=f"trace_{layer_name}", path=str(trace_path), triangle_count=len(trace_mesh.faces)))
+
+        copper_geometry = create_layer_copper_polygon(
+            model=model,
+            layer_name=layer_name,
+            track_paths=track_paths_by_layer.get(layer_name, []),
+            defects=defects_by_layer.get(layer_name, []),
+            include_zones=True,
+            include_tracks=True,
+            include_pads=True,
+        ).intersection(board_polygon)
+        mesh = extrude_geometry(
+            copper_geometry,
+            height_mm=copper_thickness_mm,
+            z_bottom_mm=z_map[layer_name] - (copper_thickness_mm / 2.0),
+        )
+        if mesh is None:
+            continue
+        copper_meshes.append(mesh)
+        layer_mesh_by_name[layer_name] = mesh
+        if "copper_layers" in selected_outputs:
+            path = output_dir / f"copper_{layer_name.replace('.', '_')}.stl"
+            mesh.export(path)
+            mesh_records.append(MeshRecord(name=f"copper_{layer_name}", path=str(path), triangle_count=len(mesh.faces)))
+
+    via_mesh = create_via_barrel_mesh(model, z_map)
+    if via_mesh is not None:
+        copper_meshes.append(via_mesh)
+        if "via_barrels" in selected_outputs:
+            via_path = output_dir / "via_barrels.stl"
+            via_mesh.export(via_path)
+            mesh_records.append(MeshRecord(name="via_barrels", path=str(via_path), triangle_count=len(via_mesh.faces)))
+
+    pad_barrel_mesh = create_pad_barrel_mesh(model, z_map)
+    if pad_barrel_mesh is not None:
+        copper_meshes.append(pad_barrel_mesh)
+        if "pad_barrels" in selected_outputs:
+            pad_barrel_path = output_dir / "pad_barrels.stl"
+            pad_barrel_mesh.export(pad_barrel_path)
+            mesh_records.append(MeshRecord(name="pad_barrels", path=str(pad_barrel_path), triangle_count=len(pad_barrel_mesh.faces)))
+
+    if copper_meshes:
+        ordered_union_inputs: list[trimesh.Trimesh] = []
+        for layer_name in model.active_layers:
+            layer_mesh = layer_mesh_by_name.get(layer_name)
+            if layer_mesh is None:
+                continue
+            ordered_union_inputs.append(layer_mesh)
+        via_union_mesh = create_via_barrel_mesh(model, z_map, overlap_mm=0.0)
+        pad_union_mesh = create_pad_barrel_mesh(model, z_map, overlap_mm=0.0)
+        if via_union_mesh is not None:
+            ordered_union_inputs.append(via_union_mesh)
+        if pad_union_mesh is not None:
+            ordered_union_inputs.append(pad_union_mesh)
+        copper_all_mesh = sequential_union(ordered_union_inputs)
+        if copper_all_mesh is not None:
+            air_cutters: list[trimesh.Trimesh] = []
+            via_air_mesh = create_via_air_mesh(model, z_map)
+            if via_air_mesh is not None:
+                air_cutters.append(via_air_mesh)
+            pad_air_mesh = create_pad_air_mesh(model, z_map)
+            if pad_air_mesh is not None:
+                air_cutters.append(pad_air_mesh)
+            if air_cutters:
+                air_mesh = trimesh.util.concatenate(air_cutters)
+                cut_mesh = boolean_difference(copper_all_mesh, air_mesh)
+                if cut_mesh is not None:
+                    copper_all_mesh = cut_mesh
+            partition_meshes.append(copper_all_mesh)
+            if "copper_all" in selected_outputs:
+                copper_all_path = output_dir / "copper_all.stl"
+                copper_all_mesh.export(copper_all_path)
+                mesh_records.append(MeshRecord(name="copper_all", path=str(copper_all_path), triangle_count=len(copper_all_mesh.faces)))
+
+    if trace_meshes:
+        trace_all_mesh = trimesh.util.concatenate(trace_meshes)
+        if "trace_all" in selected_outputs:
+            trace_all_path = output_dir / "trace_all.stl"
+            trace_all_mesh.export(trace_all_path)
+            mesh_records.append(MeshRecord(name="trace_all", path=str(trace_all_path), triangle_count=len(trace_all_mesh.faces)))
+
+    via_air_mesh = create_via_air_mesh(model, z_map)
+    if via_air_mesh is not None:
+        if "via_air" in selected_outputs:
+            via_air_path = output_dir / "via_air.stl"
+            via_air_mesh.export(via_air_path)
+            mesh_records.append(MeshRecord(name="via_air", path=str(via_air_path), triangle_count=len(via_air_mesh.faces)))
+
+    pad_air_mesh = create_pad_air_mesh(model, z_map)
+    if pad_air_mesh is not None:
+        if "pad_air" in selected_outputs:
+            pad_air_path = output_dir / "pad_air.stl"
+            pad_air_mesh.export(pad_air_path)
+            mesh_records.append(MeshRecord(name="pad_air", path=str(pad_air_path), triangle_count=len(pad_air_mesh.faces)))
+
+    for index in range(len(model.active_layers) - 1):
+        upper_layer = model.active_layers[index]
+        lower_layer = model.active_layers[index + 1]
+        upper_z = copper_bounds_for_layer(model, upper_layer, z_map)[0]
+        lower_z = copper_bounds_for_layer(model, lower_layer, z_map)[1]
+        height_mm = upper_z - lower_z
+        if height_mm <= 0:
+            continue
+        slab_geometry = create_dielectric_slab_polygon(board_polygon, model, index, index + 1, 0.0)
+        mesh = extrude_geometry(slab_geometry, height_mm=height_mm, z_bottom_mm=lower_z)
+        if mesh is None:
+            continue
+        slab_name = f"fr4_{upper_layer.replace('.', '_')}_to_{lower_layer.replace('.', '_')}"
+        partition_meshes.append(mesh)
+        if "dielectric_layers" in selected_outputs:
+            path = output_dir / f"{slab_name}.stl"
+            mesh.export(path)
+            mesh_records.append(MeshRecord(name=slab_name, path=str(path), triangle_count=len(mesh.faces)))
+
+    if partition_meshes:
+        pcb_parts_all_mesh = trimesh.util.concatenate(partition_meshes)
+        if "pcb_parts_all" in selected_outputs:
+            pcb_parts_all_path = output_dir / "pcb_parts_all.stl"
+            pcb_parts_all_mesh.export(pcb_parts_all_path)
+            mesh_records.append(MeshRecord(name="pcb_parts_all", path=str(pcb_parts_all_path), triangle_count=len(pcb_parts_all_mesh.faces)))
+
+    manifest = PartitionManifest(
+        source=str(model.board_path),
+        export_dir=str(output_dir),
+        defects_enabled=any(len(items) > 0 for items in defects_by_layer.values()),
+        meshes=mesh_records,
+    )
+    manifest_path = output_dir / "material_partition_manifest.json"
+    manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
+    return output_dir
+
+
 class VedoStackupViewer:
-    def __init__(self, model: BoardViewModel) -> None:
+    def __init__(self, model: BoardViewModel, export_output_dir: Path | None = None) -> None:
         self.model = model
+        self.export_output_dir = export_output_dir.expanduser().resolve() if export_output_dir is not None else DEFAULT_EXPORT_DIR
         self.explode_scale = 1.0
         self.visible_layers = {layer: True for layer in model.active_layers}
         self.show_dielectric = True
@@ -269,7 +508,7 @@ class VedoStackupViewer:
         self.defects_by_layer: dict[str, list[TraceDefect]] = {}
 
         self.plotter = Plotter(
-            title="Arduino Hat 3D Stackup Viewer",
+            title=f"{self.model.board_path.stem} 3D Stackup Viewer",
             bg="#efe7d2",
             bg2="#f6f0e2",
             axes=1,
@@ -438,6 +677,7 @@ class VedoStackupViewer:
             layer_name=layer_name,
             track_paths=self.track_paths_by_layer.get(layer_name, []),
             defects=self.defects_by_layer.get(layer_name, []),
+            include_zones=self.show_tracks or self.show_pads,
             include_tracks=self.show_tracks,
             include_pads=self.show_pads,
         )
@@ -651,161 +891,21 @@ class VedoStackupViewer:
         self.shortcircuit_settings = shortcircuit
         self._rebuild()
 
-    def export_current_material_partition(self, output_dir: Path = DEFAULT_EXPORT_DIR) -> Path:
-        output_dir = output_dir.expanduser().resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        board_polygon = build_board_polygon(self.model)
+    def export_current_material_partition(self, output_dir: Path | None = None, selected_outputs: set[str] | None = None) -> Path:
         z_map = self.layer_z_map or build_z_map(
             board_thickness_mm=self.model.board_thickness_mm,
             stackup=self.model.stackup,
             copper_layers=self.model.active_layers,
             explode_scale=1.0,
         )
-        mesh_records: list[MeshRecord] = []
-        copper_meshes: list[trimesh.Trimesh] = []
-        trace_meshes: list[trimesh.Trimesh] = []
-        layer_mesh_by_name: dict[str, trimesh.Trimesh] = {}
-        partition_meshes: list[trimesh.Trimesh] = []
-
-        for layer_name in self.model.active_layers:
-            copper_thickness_mm = copper_thickness_for_layer(self.model, layer_name)
-            trace_geometry = create_layer_copper_polygon(
-                model=self.model,
-                layer_name=layer_name,
-                track_paths=self.track_paths_by_layer.get(layer_name, []),
-                defects=self.defects_by_layer.get(layer_name, []),
-                include_tracks=True,
-                include_pads=False,
-            )
-            trace_mesh = extrude_geometry(
-                trace_geometry,
-                height_mm=copper_thickness_mm,
-                z_bottom_mm=z_map[layer_name] - (copper_thickness_mm / 2.0),
-            )
-            if trace_mesh is not None:
-                trace_path = output_dir / f"trace_{layer_name.replace('.', '_')}.stl"
-                trace_mesh.export(trace_path)
-                trace_meshes.append(trace_mesh)
-                mesh_records.append(MeshRecord(name=f"trace_{layer_name}", path=str(trace_path), triangle_count=len(trace_mesh.faces)))
-
-            copper_geometry = create_layer_copper_polygon(
-                model=self.model,
-                layer_name=layer_name,
-                track_paths=self.track_paths_by_layer.get(layer_name, []),
-                defects=self.defects_by_layer.get(layer_name, []),
-                include_tracks=True,
-                include_pads=True,
-            ).intersection(board_polygon)
-            mesh = extrude_geometry(
-                copper_geometry,
-                height_mm=copper_thickness_mm,
-                z_bottom_mm=z_map[layer_name] - (copper_thickness_mm / 2.0),
-            )
-            if mesh is None:
-                continue
-            path = output_dir / f"copper_{layer_name.replace('.', '_')}.stl"
-            mesh.export(path)
-            copper_meshes.append(mesh)
-            layer_mesh_by_name[layer_name] = mesh
-            mesh_records.append(MeshRecord(name=f"copper_{layer_name}", path=str(path), triangle_count=len(mesh.faces)))
-
-        via_mesh = create_via_barrel_mesh(self.model, z_map)
-        if via_mesh is not None:
-            via_path = output_dir / "via_barrels.stl"
-            via_mesh.export(via_path)
-            copper_meshes.append(via_mesh)
-            mesh_records.append(MeshRecord(name="via_barrels", path=str(via_path), triangle_count=len(via_mesh.faces)))
-
-        pad_barrel_mesh = create_pad_barrel_mesh(self.model, z_map)
-        if pad_barrel_mesh is not None:
-            pad_barrel_path = output_dir / "pad_barrels.stl"
-            pad_barrel_mesh.export(pad_barrel_path)
-            copper_meshes.append(pad_barrel_mesh)
-            mesh_records.append(MeshRecord(name="pad_barrels", path=str(pad_barrel_path), triangle_count=len(pad_barrel_mesh.faces)))
-
-        if copper_meshes:
-            ordered_union_inputs: list[trimesh.Trimesh] = []
-            for layer_name in self.model.active_layers:
-                layer_mesh = layer_mesh_by_name.get(layer_name)
-                if layer_mesh is None:
-                    continue
-                ordered_union_inputs.append(layer_mesh)
-            via_union_mesh = create_via_barrel_mesh(self.model, z_map, overlap_mm=0.0)
-            pad_union_mesh = create_pad_barrel_mesh(self.model, z_map, overlap_mm=0.0)
-            if via_union_mesh is not None:
-                ordered_union_inputs.append(via_union_mesh)
-            if pad_union_mesh is not None:
-                ordered_union_inputs.append(pad_union_mesh)
-            copper_all_mesh = sequential_union(ordered_union_inputs)
-            if copper_all_mesh is not None:
-                air_cutters: list[trimesh.Trimesh] = []
-                via_air_mesh = create_via_air_mesh(self.model, z_map)
-                if via_air_mesh is not None:
-                    air_cutters.append(via_air_mesh)
-                pad_air_mesh = create_pad_air_mesh(self.model, z_map)
-                if pad_air_mesh is not None:
-                    air_cutters.append(pad_air_mesh)
-                if air_cutters:
-                    air_mesh = trimesh.util.concatenate(air_cutters)
-                    cut_mesh = boolean_difference(copper_all_mesh, air_mesh)
-                    if cut_mesh is not None:
-                        copper_all_mesh = cut_mesh
-                copper_all_path = output_dir / "copper_all.stl"
-                copper_all_mesh.export(copper_all_path)
-                mesh_records.append(MeshRecord(name="copper_all", path=str(copper_all_path), triangle_count=len(copper_all_mesh.faces)))
-                partition_meshes.append(copper_all_mesh)
-
-        if trace_meshes:
-            trace_all_mesh = trimesh.util.concatenate(trace_meshes)
-            trace_all_path = output_dir / "trace_all.stl"
-            trace_all_mesh.export(trace_all_path)
-            mesh_records.append(MeshRecord(name="trace_all", path=str(trace_all_path), triangle_count=len(trace_all_mesh.faces)))
-
-        via_air_mesh = create_via_air_mesh(self.model, z_map)
-        if via_air_mesh is not None:
-            via_air_path = output_dir / "via_air.stl"
-            via_air_mesh.export(via_air_path)
-            mesh_records.append(MeshRecord(name="via_air", path=str(via_air_path), triangle_count=len(via_air_mesh.faces)))
-
-        pad_air_mesh = create_pad_air_mesh(self.model, z_map)
-        if pad_air_mesh is not None:
-            pad_air_path = output_dir / "pad_air.stl"
-            pad_air_mesh.export(pad_air_path)
-            mesh_records.append(MeshRecord(name="pad_air", path=str(pad_air_path), triangle_count=len(pad_air_mesh.faces)))
-
-        for index in range(len(self.model.active_layers) - 1):
-            upper_layer = self.model.active_layers[index]
-            lower_layer = self.model.active_layers[index + 1]
-            upper_z = copper_bounds_for_layer(self.model, upper_layer, z_map)[0]
-            lower_z = copper_bounds_for_layer(self.model, lower_layer, z_map)[1]
-            height_mm = upper_z - lower_z
-            if height_mm <= 0:
-                continue
-            slab_geometry = create_dielectric_slab_polygon(board_polygon, self.model, index, index + 1, 0.0)
-            mesh = extrude_geometry(slab_geometry, height_mm=height_mm, z_bottom_mm=lower_z)
-            if mesh is None:
-                continue
-            slab_name = f"fr4_{upper_layer.replace('.', '_')}_to_{lower_layer.replace('.', '_')}"
-            path = output_dir / f"{slab_name}.stl"
-            mesh.export(path)
-            mesh_records.append(MeshRecord(name=slab_name, path=str(path), triangle_count=len(mesh.faces)))
-            partition_meshes.append(mesh)
-
-        if partition_meshes:
-            pcb_parts_all_mesh = trimesh.util.concatenate(partition_meshes)
-            pcb_parts_all_path = output_dir / "pcb_parts_all.stl"
-            pcb_parts_all_mesh.export(pcb_parts_all_path)
-            mesh_records.append(MeshRecord(name="pcb_parts_all", path=str(pcb_parts_all_path), triangle_count=len(pcb_parts_all_mesh.faces)))
-
-        manifest = PartitionManifest(
-            source=str(self.model.board_path),
-            export_dir=str(output_dir),
-            defects_enabled=any(len(items) > 0 for items in self.defects_by_layer.values()),
-            meshes=mesh_records,
+        return export_partition_from_state(
+            model=self.model,
+            output_dir=output_dir or self.export_output_dir,
+            track_paths_by_layer=self.track_paths_by_layer,
+            defects_by_layer=self.defects_by_layer,
+            z_map=z_map,
+            selected_outputs=selected_outputs,
         )
-        manifest_path = output_dir / "material_partition_manifest.json"
-        manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
-        return output_dir
 
     def focus_defect_by_index(self, index: int) -> None:
         if index < 0 or index >= len(self.defect_list_items):
@@ -911,8 +1011,13 @@ class StackupControlPanel:
         self.shortcircuit_width_var = tk.DoubleVar(value=self.viewer.shortcircuit_settings.bridge_width_mm)
         self.shortcircuit_noise_var = tk.DoubleVar(value=self.viewer.shortcircuit_settings.noise_amount)
         self.shortcircuit_seed_var = tk.IntVar(value=self.viewer.shortcircuit_settings.seed)
+        self.export_option_vars = {
+            option_name: tk.BooleanVar(value=False)
+            for option_name, _label in EXPORT_OPTION_LABELS
+        }
         self.defect_list_window: tk.Toplevel | None = None
         self.defect_listbox: tk.Listbox | None = None
+        self.settings_window: tk.Toplevel | None = None
 
         self._build_ui()
         self.viewer.show()
@@ -921,7 +1026,7 @@ class StackupControlPanel:
     def _build_ui(self) -> None:
         frame = self.content_frame
 
-        ttk.Label(frame, text="Arduino Hat", font=("Georgia", 18, "bold")).pack(anchor="w")
+        ttk.Label(frame, text=self.viewer.model.board_path.stem, font=("Georgia", 18, "bold")).pack(anchor="w")
         ttk.Label(
             frame,
             text="Choose which material layers are visible in the vedo window.",
@@ -982,6 +1087,7 @@ class StackupControlPanel:
         defect_tools_box.pack(fill="x", pady=(12, 0))
         ttk.Button(defect_tools_box, text="Show Defect List", command=self._open_defect_list_window).pack(fill="x")
         ttk.Button(defect_tools_box, text="Export STL Partition", command=self._export_material_partition).pack(fill="x", pady=(8, 0))
+        ttk.Button(defect_tools_box, text="Settings", command=self._open_settings_window).pack(fill="x", pady=(8, 0))
 
         ttk.Button(frame, text="Reset Explode", command=self._reset_explode).pack(fill="x", pady=(14, 0))
 
@@ -1143,6 +1249,49 @@ class StackupControlPanel:
             return
         messagebox.showinfo("Export Complete", f"Exported current STL partition to:\n{output_dir}")
 
+    def _open_settings_window(self) -> None:
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.settings_window.focus_force()
+            return
+        window = tk.Toplevel(self.root)
+        window.title("Settings")
+        window.geometry("320x360")
+        window.resizable(False, False)
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", self._close_settings_window)
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Export Settings", font=("Georgia", 12, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Tick the STL outputs to generate when you click Save.", wraplength=280).pack(anchor="w", pady=(4, 10))
+        for option_name, label in EXPORT_OPTION_LABELS:
+            ttk.Checkbutton(frame, text=label, variable=self.export_option_vars[option_name]).pack(anchor="w", pady=2)
+        ttk.Button(frame, text="Save", command=self._save_settings).pack(fill="x", pady=(16, 0))
+        self.settings_window = window
+
+    def _save_settings(self) -> None:
+        selected_outputs = {
+            option_name
+            for option_name, variable in self.export_option_vars.items()
+            if variable.get()
+        }
+        if selected_outputs:
+            try:
+                output_dir = self.viewer.export_current_material_partition(selected_outputs=selected_outputs)
+            except Exception as exc:
+                messagebox.showerror("Save Failed", f"Could not generate STL partition.\n\n{exc}")
+                return
+            self._close_settings_window()
+            messagebox.showinfo("Settings Saved", f"Settings saved and STLs generated in:\n{output_dir}")
+            return
+        self._close_settings_window()
+        messagebox.showinfo("Settings Saved", "Settings saved.")
+
+    def _close_settings_window(self) -> None:
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.destroy()
+        self.settings_window = None
+
     def _open_defect_list_window(self) -> None:
         if self.defect_list_window is not None and self.defect_list_window.winfo_exists():
             self._refresh_defect_listbox()
@@ -1227,6 +1376,7 @@ class StackupControlPanel:
     def _on_close(self) -> None:
         try:
             self._close_defect_list_window()
+            self._close_settings_window()
             self._unbind_mousewheel()
             self.viewer.close()
         finally:
@@ -2273,10 +2423,16 @@ def create_layer_copper_polygon(
     layer_name: str,
     track_paths: list[tuple[list[tuple[float, float]], float]] | None = None,
     defects: list[TraceDefect] | None = None,
+    include_zones: bool = True,
     include_tracks: bool = True,
     include_pads: bool = True,
 ):
     geometries = []
+
+    if include_zones:
+        zone_geometry = create_zone_geometry(model, layer_name)
+        if not zone_geometry.is_empty:
+            geometries.append(zone_geometry)
 
     if include_tracks:
         if track_paths is None:
@@ -2339,11 +2495,11 @@ def create_layer_copper_polygon(
         return GeometryCollection()
     copper = unary_union(geometries)
     holes = []
-    seen_pad_holes: set[tuple[str, str]] = set()
+    seen_pad_holes: set[tuple[str, str, int, int]] = set()
     for pad in model.pads:
         if pad.layer != layer_name:
             continue
-        pad_key = (pad.reference, pad.pad_number)
+        pad_key = pad_physical_key(pad)
         if pad_key in seen_pad_holes:
             continue
         seen_pad_holes.add(pad_key)
@@ -2393,9 +2549,9 @@ def create_dielectric_slab_polygon(
             center_x, center_y = board_to_centered(model, via.position_mm)
             outer_radius = via_barrel_outer_radius(via)
             subtractors.append(regular_ngon(center_x, center_y, outer_radius + clearance_mm, VIA_SIDE_COUNT))
-    seen_pad_holes: set[tuple[str, str]] = set()
+    seen_pad_holes: set[tuple[str, str, int, int]] = set()
     for pad in model.pads:
-        pad_key = (pad.reference, pad.pad_number)
+        pad_key = pad_physical_key(pad)
         if pad_key in seen_pad_holes:
             continue
         seen_pad_holes.add(pad_key)
@@ -2467,6 +2623,31 @@ def create_pad_drill_polygon(model: BoardViewModel, pad: PadData) -> Polygon | N
     polygon = shapely.affinity.rotate(polygon, -pad.rotation_deg, origin=(0, 0), use_radians=False)
     polygon = shapely.affinity.translate(polygon, center_x, center_y)
     return polygon
+
+
+def zone_contour_to_polygon(model: BoardViewModel, contour: ZoneContourData) -> Polygon | None:
+    exterior = [board_to_centered(model, point) for point in contour.exterior_mm]
+    holes = [[board_to_centered(model, point) for point in hole] for hole in contour.holes_mm]
+    if len(exterior) < 3:
+        return None
+    polygon = Polygon(exterior, holes)
+    if polygon.is_empty:
+        return None
+    return polygon.buffer(0)
+
+
+def create_zone_geometry(model: BoardViewModel, layer_name: str) -> Polygon | MultiPolygon | GeometryCollection:
+    polygons: list[Polygon] = []
+    for zone in model.zones:
+        if zone.layer != layer_name:
+            continue
+        for contour in zone.contours:
+            polygon = zone_contour_to_polygon(model, contour)
+            if polygon is not None and not polygon.is_empty:
+                polygons.append(polygon)
+    if not polygons:
+        return GeometryCollection()
+    return unary_union(polygons).buffer(0)
 
 
 def iter_polygons(geometry):
@@ -2662,45 +2843,32 @@ def create_pad_barrel_mesh(
     overlap_mm: float = BARREL_LAYER_OVERLAP_MM,
 ) -> trimesh.Trimesh | None:
     meshes: list[trimesh.Trimesh] = []
-    seen_pads: set[tuple[str, str]] = set()
+    seen_pads: set[tuple[str, str, int, int]] = set()
     for pad in model.pads:
-        pad_key = (pad.reference, pad.pad_number)
+        pad_key = pad_physical_key(pad)
         if pad_key in seen_pads:
             continue
         seen_pads.add(pad_key)
         if pad.drill_x_mm <= 1e-6 or pad.drill_y_mm <= 1e-6:
             continue
         layer_names = sorted(
-            [candidate.layer for candidate in model.pads if candidate.reference == pad.reference and candidate.pad_number == pad.pad_number],
+            [candidate.layer for candidate in model.pads if pad_physical_key(candidate) == pad_key],
             key=copper_layer_sort_key,
         )
         if not layer_names:
             continue
-        center_x, center_y = board_to_centered(model, pad.center_mm)
-        inner_radius = min(pad.drill_x_mm, pad.drill_y_mm) / 2.0
+        ring_polygon = create_pad_barrel_ring_polygon(model, pad)
+        if ring_polygon is None:
+            continue
         layer_indices = [model.active_layers.index(layer_name) for layer_name in layer_names]
         if len(layer_indices) < 2:
             continue
-        max_outer_radius = (min(pad.size_x_mm, pad.size_y_mm) / 2.0) - 0.01
-        if max_outer_radius <= inner_radius:
-            continue
-        outer_radius = min(inner_radius + COPPER_THICKNESS_MM, max_outer_radius)
         for upper_index, lower_index in zip(layer_indices, layer_indices[1:]):
             upper_layer = model.active_layers[upper_index]
             lower_layer = model.active_layers[lower_index]
             z_min = copper_bounds_for_layer(model, lower_layer, z_map)[1] - overlap_mm
             z_max = copper_bounds_for_layer(model, upper_layer, z_map)[0] + overlap_mm
-            mesh = make_tube_mesh(
-                center_x=center_x,
-                center_y=center_y,
-                inner_radius=inner_radius,
-                outer_radius=outer_radius,
-                z_min=z_min,
-                z_max=z_max,
-                sides=VIA_SIDE_COUNT,
-                angle_offset_deg=-pad.rotation_deg,
-                cap_ends=cap_ends,
-            )
+            mesh = extrude_geometry(ring_polygon, height_mm=z_max - z_min, z_bottom_mm=z_min)
             if mesh is not None:
                 meshes.append(mesh)
     if not meshes:
@@ -2731,16 +2899,16 @@ def create_via_air_mesh(model: BoardViewModel, z_map: dict[str, float]) -> trime
 
 def create_pad_air_mesh(model: BoardViewModel, z_map: dict[str, float]) -> trimesh.Trimesh | None:
     meshes: list[trimesh.Trimesh] = []
-    seen_pads: set[tuple[str, str]] = set()
+    seen_pads: set[tuple[str, str, int, int]] = set()
     for pad in model.pads:
-        pad_key = (pad.reference, pad.pad_number)
+        pad_key = pad_physical_key(pad)
         if pad_key in seen_pads:
             continue
         seen_pads.add(pad_key)
         if pad.drill_x_mm <= 1e-6 or pad.drill_y_mm <= 1e-6:
             continue
         layer_names = sorted(
-            [candidate.layer for candidate in model.pads if candidate.reference == pad.reference and candidate.pad_number == pad.pad_number],
+            [candidate.layer for candidate in model.pads if pad_physical_key(candidate) == pad_key],
             key=copper_layer_sort_key,
         )
         if len(layer_names) < 2:
@@ -2848,6 +3016,15 @@ def line_intersection(
     px = ((determinant_a * (x3 - x4)) - ((x1 - x2) * determinant_b)) / denominator
     py = ((determinant_a * (y3 - y4)) - ((y1 - y2) * determinant_b)) / denominator
     return (px, py)
+
+
+def pad_physical_key(pad: PadData) -> tuple[str, str, int, int]:
+    return (
+        pad.reference,
+        pad.pad_number,
+        round(pad.center_mm.x_mm * 1000.0),
+        round(pad.center_mm.y_mm * 1000.0),
+    )
 
 
 def make_ribbon_prism_mesh(
@@ -2967,6 +3144,20 @@ def load_board_view_model(json_path: Path) -> BoardViewModel:
                 drill_y_mm=float(item.get("drill_y_mm", 0.0)),
             )
             for item in payload["pads"]
+        ],
+        zones=[
+            ZoneData(
+                layer=item["layer"],
+                net=item["net"],
+                contours=[
+                    ZoneContourData(
+                        exterior_mm=[PointMM(**point) for point in contour["exterior_mm"]],
+                        holes_mm=[[PointMM(**point) for point in hole] for hole in contour.get("holes_mm", [])],
+                    )
+                    for contour in item.get("contours", [])
+                ],
+            )
+            for item in payload.get("zones", [])
         ],
         outline=[
             OutlineData(

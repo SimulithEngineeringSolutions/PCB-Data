@@ -1,5 +1,5 @@
 {
-  "source_pcb": "C:\\Users\\Ryant\\Documents\\GitHub\\PCB Data\\DataSet\\KICAD\\Arduino hat\\Arduino_hat.kicad_pcb",
+  "source_pcb": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\DataSet\\KICAD\\Arduino hat\\Arduino_hat.kicad_pcb",
   "board_thickness_mm": 1.6,
   "left_mm": 94.139912,
   "top_mm": 120.908608,
@@ -6761,6 +6761,7 @@
       "drill_y_mm": 0.0
     }
   ],
+  "zones": [],
   "outline": [
     {
       "kind": "segment",

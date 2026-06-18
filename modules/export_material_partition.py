@@ -74,6 +74,19 @@ class OutlineData:
 
 
 @dataclass(slots=True)
+class ZoneContourData:
+    exterior_mm: list[PointMM]
+    holes_mm: list[list[PointMM]]
+
+
+@dataclass(slots=True)
+class ZoneData:
+    layer: str
+    net: str
+    contours: list[ZoneContourData]
+
+
+@dataclass(slots=True)
 class StackupCopperLayer:
     name: str
     thickness_mm: float
@@ -104,6 +117,7 @@ class BoardViewModel:
     tracks: list[TrackData]
     vias: list[ViaData]
     pads: list[PadData]
+    zones: list[ZoneData]
     outline: list[OutlineData]
     active_layers: list[str]
     nets: list[str]
@@ -190,6 +204,20 @@ def load_board_view_model(json_path: Path) -> BoardViewModel:
                 drill_y_mm=float(item.get("drill_y_mm", 0.0)),
             )
             for item in payload["pads"]
+        ],
+        zones=[
+            ZoneData(
+                layer=item["layer"],
+                net=item["net"],
+                contours=[
+                    ZoneContourData(
+                        exterior_mm=[PointMM(**point) for point in contour["exterior_mm"]],
+                        holes_mm=[[PointMM(**point) for point in hole] for hole in contour.get("holes_mm", [])],
+                    )
+                    for contour in item.get("contours", [])
+                ],
+            )
+            for item in payload.get("zones", [])
         ],
         outline=[
             OutlineData(
@@ -420,6 +448,15 @@ def pad_has_plated_hole(pad: PadData) -> bool:
     return pad.drill_x_mm > 1e-6 and pad.drill_y_mm > 1e-6
 
 
+def pad_physical_key(pad: PadData) -> tuple[str, str, int, int]:
+    return (
+        pad.reference,
+        pad.pad_number,
+        round(pad.center_mm.x_mm * 1000.0),
+        round(pad.center_mm.y_mm * 1000.0),
+    )
+
+
 def point_key(point: tuple[float, float]) -> tuple[int, int]:
     return (round(point[0] * 1000), round(point[1] * 1000))
 
@@ -616,8 +653,36 @@ def create_pad_barrel_ring_polygon(model: BoardViewModel, pad: PadData) -> Polyg
     return ring_polygon
 
 
+def zone_contour_to_polygon(model: BoardViewModel, contour: ZoneContourData) -> Polygon | None:
+    exterior = [board_to_centered(model, point) for point in contour.exterior_mm]
+    holes = [[board_to_centered(model, point) for point in hole] for hole in contour.holes_mm]
+    if len(exterior) < 3:
+        return None
+    polygon = Polygon(exterior, holes)
+    if polygon.is_empty:
+        return None
+    return polygon.buffer(0)
+
+
+def create_zone_geometry(model: BoardViewModel, layer_name: str) -> Polygon | MultiPolygon | GeometryCollection:
+    polygons: list[Polygon] = []
+    for zone in model.zones:
+        if zone.layer != layer_name:
+            continue
+        for contour in zone.contours:
+            polygon = zone_contour_to_polygon(model, contour)
+            if polygon is not None and not polygon.is_empty:
+                polygons.append(polygon)
+    if not polygons:
+        return GeometryCollection()
+    return unary_union(polygons).buffer(0)
+
+
 def create_layer_copper_polygon(model: BoardViewModel, layer_name: str, board_polygon: Polygon) -> Polygon | MultiPolygon | GeometryCollection:
     geometries: list[Any] = []
+    zone_geometry = create_zone_geometry(model, layer_name)
+    if not zone_geometry.is_empty:
+        geometries.append(zone_geometry)
     layer_tracks = [track for track in model.tracks if track.layer == layer_name]
     for polyline_xy, width_mm in build_connected_track_paths(model, layer_tracks):
         geometries.append(
@@ -868,46 +933,32 @@ def create_pad_barrel_mesh(
     overlap_mm: float = BARREL_LAYER_OVERLAP_MM,
 ) -> trimesh.Trimesh | None:
     meshes: list[trimesh.Trimesh] = []
-    seen_pads: set[tuple[str, str]] = set()
+    seen_pads: set[tuple[str, str, int, int]] = set()
     for pad in model.pads:
-        pad_key = (pad.reference, pad.pad_number)
+        pad_key = pad_physical_key(pad)
         if pad_key in seen_pads:
             continue
         seen_pads.add(pad_key)
         if not pad_has_plated_hole(pad):
             continue
         layer_names = sorted(
-            [candidate.layer for candidate in model.pads if candidate.reference == pad.reference and candidate.pad_number == pad.pad_number],
+            [candidate.layer for candidate in model.pads if pad_physical_key(candidate) == pad_key],
             key=copper_layer_sort_key,
         )
         if not layer_names:
             continue
-        inner_radius = min(pad.drill_x_mm, pad.drill_y_mm) / 2.0
-        outer_radius = inner_radius + VIA_PLATING_THICKNESS_MM
-        center_x, center_y = board_to_centered(model, pad.center_mm)
+        ring_polygon = create_pad_barrel_ring_polygon(model, pad)
+        if ring_polygon is None:
+            continue
         layer_indices = [model.active_layers.index(layer_name) for layer_name in layer_names]
         if len(layer_indices) < 2:
             continue
-        max_outer_radius = (min(pad.size_x_mm, pad.size_y_mm) / 2.0) - 0.01
-        if max_outer_radius <= inner_radius:
-            continue
-        outer_radius = min(inner_radius + VIA_PLATING_THICKNESS_MM, max_outer_radius)
         for upper_index, lower_index in zip(layer_indices, layer_indices[1:]):
             upper_layer = model.active_layers[upper_index]
             lower_layer = model.active_layers[lower_index]
             z_min = copper_bounds_for_layer(model, lower_layer, z_map)[1] - overlap_mm
             z_max = copper_bounds_for_layer(model, upper_layer, z_map)[0] + overlap_mm
-            mesh = make_tube_mesh(
-                center_x=center_x,
-                center_y=center_y,
-                inner_radius=inner_radius,
-                outer_radius=outer_radius,
-                z_min=z_min,
-                z_max=z_max,
-                sides=VIA_SIDE_COUNT,
-                angle_offset_deg=-pad.rotation_deg,
-                cap_ends=cap_ends,
-            )
+            mesh = extrude_geometry(ring_polygon, height_mm=z_max - z_min, z_bottom_mm=z_min)
             if mesh is not None:
                 meshes.append(mesh)
     if not meshes:
@@ -936,16 +987,16 @@ def create_via_air_mesh(model: BoardViewModel, z_map: dict[str, float]) -> trime
 
 def create_pad_air_mesh(model: BoardViewModel, z_map: dict[str, float]) -> trimesh.Trimesh | None:
     meshes: list[trimesh.Trimesh] = []
-    seen_pads: set[tuple[str, str]] = set()
+    seen_pads: set[tuple[str, str, int, int]] = set()
     for pad in model.pads:
-        pad_key = (pad.reference, pad.pad_number)
+        pad_key = pad_physical_key(pad)
         if pad_key in seen_pads:
             continue
         seen_pads.add(pad_key)
         if not pad_has_plated_hole(pad):
             continue
         layer_names = sorted(
-            [candidate.layer for candidate in model.pads if candidate.reference == pad.reference and candidate.pad_number == pad.pad_number],
+            [candidate.layer for candidate in model.pads if pad_physical_key(candidate) == pad_key],
             key=copper_layer_sort_key,
         )
         if len(layer_names) < 2:
@@ -986,9 +1037,9 @@ def create_dielectric_slab_polygon(
             center_x, center_y = board_to_centered(model, via.position_mm)
             outer_radius = via_barrel_outer_radius(via)
             subtractors.append(regular_ngon(center_x, center_y, outer_radius + clearance_mm, VIA_SIDE_COUNT))
-    seen_pad_holes: set[tuple[str, str]] = set()
+    seen_pad_holes: set[tuple[str, str, int, int]] = set()
     for pad in model.pads:
-        pad_key = (pad.reference, pad.pad_number)
+        pad_key = pad_physical_key(pad)
         if pad_key in seen_pad_holes:
             continue
         seen_pad_holes.add(pad_key)

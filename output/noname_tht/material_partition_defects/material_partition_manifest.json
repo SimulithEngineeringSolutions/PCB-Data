@@ -1,0 +1,57 @@
+{
+  "source": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\DataSet\\KICAD\\Breadboard-powersupply\\noname_THT.kicad_pcb",
+  "export_dir": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects",
+  "defects_enabled": false,
+  "meshes": [
+    {
+      "name": "trace_F.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\trace_F_Cu.stl",
+      "triangle_count": 600
+    },
+    {
+      "name": "copper_F.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\copper_F_Cu.stl",
+      "triangle_count": 3712
+    },
+    {
+      "name": "trace_B.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\trace_B_Cu.stl",
+      "triangle_count": 452
+    },
+    {
+      "name": "copper_B.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\copper_B_Cu.stl",
+      "triangle_count": 3580
+    },
+    {
+      "name": "pad_barrels",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\pad_barrels.stl",
+      "triangle_count": 6816
+    },
+    {
+      "name": "copper_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\copper_all.stl",
+      "triangle_count": 11844
+    },
+    {
+      "name": "trace_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\trace_all.stl",
+      "triangle_count": 1052
+    },
+    {
+      "name": "pad_air",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\pad_air.stl",
+      "triangle_count": 1584
+    },
+    {
+      "name": "fr4_F_Cu_to_B_Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\fr4_F_Cu_to_B_Cu.stl",
+      "triangle_count": 1964
+    },
+    {
+      "name": "pcb_parts_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\noname_tht\\material_partition_defects\\pcb_parts_all.stl",
+      "triangle_count": 13808
+    }
+  ]
+}
