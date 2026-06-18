@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox, ttk
 
 from modules.arduino_hat_stackup_vedo import (
     COMMON_KICAD_PYTHON_PATHS,
@@ -53,22 +53,75 @@ def find_kicad_python(explicit_path: str | None = None) -> Path | None:
 
 
 def choose_input_pcb(initial_path: Path | None = None) -> Path:
+    initial_candidate = (initial_path or DEFAULT_INPUT_PCB).expanduser().resolve()
+    initial_dir = str(initial_candidate.parent)
+    chosen_path: Path | None = None
+
     root = tk.Tk()
-    root.withdraw()
+    root.title("Choose PCB File")
     root.attributes("-topmost", True)
-    initial_dir = str((initial_path or DEFAULT_INPUT_PCB).expanduser().resolve().parent)
-    selected = filedialog.askopenfilename(
-        title="Choose a KiCad PCB file",
-        initialdir=initial_dir,
-        filetypes=[("KiCad PCB files", "*.kicad_pcb"), ("All files", "*.*")],
-    )
-    root.destroy()
-    if not selected:
+    root.geometry("760x170")
+    root.minsize(680, 170)
+    selected_value = tk.StringVar(master=root, value=str(initial_candidate))
+
+    frame = ttk.Frame(root, padding=16)
+    frame.pack(fill="both", expand=True)
+    frame.columnconfigure(0, weight=1)
+
+    ttk.Label(
+        frame,
+        text="Select the KiCad .kicad_pcb file to use for extraction, STL export, and viewing.",
+        wraplength=700,
+        justify="left",
+    ).grid(row=0, column=0, columnspan=3, sticky="w")
+
+    entry = ttk.Entry(frame, textvariable=selected_value)
+    entry.grid(row=1, column=0, sticky="ew", pady=(14, 8))
+
+    def browse() -> None:
+        selected = filedialog.askopenfilename(
+            parent=root,
+            title="Choose a KiCad PCB file",
+            initialdir=initial_dir,
+            filetypes=[("KiCad PCB files", "*.kicad_pcb"), ("All files", "*.*")],
+        )
+        if selected:
+            selected_value.set(selected)
+
+    def confirm() -> None:
+        nonlocal chosen_path
+        raw_value = selected_value.get().strip()
+        if not raw_value:
+            messagebox.showerror("Missing file", "Please choose a .kicad_pcb file.", parent=root)
+            return
+        candidate = Path(raw_value).expanduser().resolve()
+        if candidate.suffix.lower() != ".kicad_pcb":
+            messagebox.showerror("Invalid file", f"Selected file is not a .kicad_pcb file:\n{candidate}", parent=root)
+            return
+        if not candidate.exists():
+            messagebox.showerror("File not found", f"Selected file does not exist:\n{candidate}", parent=root)
+            return
+        chosen_path = candidate
+        root.destroy()
+
+    def cancel() -> None:
+        root.destroy()
+
+    ttk.Button(frame, text="Browse...", command=browse).grid(row=1, column=1, padx=(8, 0), pady=(14, 8))
+
+    button_row = ttk.Frame(frame)
+    button_row.grid(row=2, column=0, columnspan=3, sticky="e", pady=(8, 0))
+    ttk.Button(button_row, text="Cancel", command=cancel).pack(side="right")
+    ttk.Button(button_row, text="Use This File", command=confirm).pack(side="right", padx=(0, 8))
+
+    root.bind("<Return>", lambda _event: confirm())
+    root.bind("<Escape>", lambda _event: cancel())
+    entry.focus_set()
+    root.mainloop()
+
+    if chosen_path is None:
         raise PipelineError("No .kicad_pcb file was selected.")
-    selected_path = Path(selected).expanduser().resolve()
-    if selected_path.suffix.lower() != ".kicad_pcb":
-        raise PipelineError(f"Selected file is not a .kicad_pcb file: {selected_path}")
-    return selected_path
+    return chosen_path
 
 
 def slugify_board_name(board_path: Path) -> str:
@@ -240,9 +293,7 @@ def add_defect_arguments(parser: argparse.ArgumentParser) -> None:
 def resolve_input_board(args: argparse.Namespace) -> Path:
     if args.input_pcb is not None:
         return args.input_pcb.expanduser().resolve()
-    if args.no_picker:
-        return DEFAULT_INPUT_PCB.expanduser().resolve()
-    return choose_input_pcb(DEFAULT_INPUT_PCB)
+    return DEFAULT_INPUT_PCB.expanduser().resolve()
 
 
 def main(argv: list[str] | None = None) -> int:

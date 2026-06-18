@@ -18,6 +18,7 @@ import trimesh
 DEFAULT_INPUT = Path("output/arduino_hat/copper_paths.json")
 DEFAULT_OUTPUT_DIR = Path("output/arduino_hat/material_partition")
 COPPER_THICKNESS_MM = 0.035
+SOLDER_MASK_THICKNESS_MM = 0.02
 DEFAULT_CLEARANCE_MM = 0.01
 BARREL_LAYER_OVERLAP_MM = 0.005
 VIA_SIDE_COUNT = 10
@@ -1051,6 +1052,24 @@ def create_dielectric_slab_polygon(
     return board_polygon.difference(unary_union(subtractors)).buffer(0)
 
 
+def mask_layer_order(model: BoardViewModel, side: str) -> str | None:
+    if side == "top":
+        return "F.Cu" if "F.Cu" in model.active_layers else (model.active_layers[0] if model.active_layers else None)
+    if side == "bottom":
+        return "B.Cu" if "B.Cu" in model.active_layers else (model.active_layers[-1] if model.active_layers else None)
+    return None
+
+
+def create_solder_mask_geometry(model: BoardViewModel, side: str, board_polygon: Polygon) -> Polygon | MultiPolygon | GeometryCollection:
+    layer_name = mask_layer_order(model, side)
+    if layer_name is None:
+        return GeometryCollection()
+    copper_geometry = create_layer_copper_polygon(model, layer_name, board_polygon).intersection(board_polygon)
+    if copper_geometry.is_empty:
+        return board_polygon
+    return board_polygon.difference(copper_geometry).buffer(0)
+
+
 def export_material_partition(input_path: Path, output_dir: Path, clearance_mm: float) -> None:
     model = load_board_view_model(input_path)
     output_dir = output_dir.expanduser().resolve()
@@ -1163,6 +1182,24 @@ def export_material_partition(input_path: Path, output_dir: Path, clearance_mm: 
         pad_air_mesh.export(pad_air_path)
         mesh_records.append(MeshRecord(name="pad_air", path=str(pad_air_path), triangle_count=len(pad_air_mesh.faces)))
         scene.add_geometry(pad_air_mesh, node_name="pad_air")
+
+    for side_name, side_label in (("top", "F.Mask"), ("bottom", "B.Mask")):
+        layer_name = mask_layer_order(model, side_name)
+        if layer_name is None:
+            continue
+        mask_geometry = create_solder_mask_geometry(model, side_name, board_polygon)
+        if side_name == "top":
+            z_bottom = copper_bounds_for_layer(model, layer_name, z_map)[1]
+        else:
+            z_bottom = copper_bounds_for_layer(model, layer_name, z_map)[0] - SOLDER_MASK_THICKNESS_MM
+        mask_mesh = extrude_geometry(mask_geometry, height_mm=SOLDER_MASK_THICKNESS_MM, z_bottom_mm=z_bottom)
+        if mask_mesh is None:
+            continue
+        mask_path = output_dir / f"solder_mask_{side_label.replace('.', '_')}.stl"
+        mask_mesh.export(mask_path)
+        mesh_records.append(MeshRecord(name=f"solder_mask_{side_label}", path=str(mask_path), triangle_count=len(mask_mesh.faces)))
+        scene.add_geometry(mask_mesh, node_name=f"solder_mask_{side_label}")
+        partition_meshes.append(mask_mesh)
 
     for index in range(len(model.active_layers) - 1):
         upper_layer = model.active_layers[index]

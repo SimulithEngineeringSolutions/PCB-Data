@@ -10,7 +10,7 @@ import tkinter as tk
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 import shapely.affinity
@@ -21,6 +21,7 @@ import trimesh
 from vedo import Cylinder, Line, Mesh, Plotter, Text2D
 
 COPPER_THICKNESS_MM = 0.035
+SOLDER_MASK_THICKNESS_MM = 0.02
 BARREL_LAYER_OVERLAP_MM = 0.005
 VIA_SIDE_COUNT = 10
 VIA_PLATING_THICKNESS_MM = COPPER_THICKNESS_MM
@@ -40,6 +41,7 @@ DEFECT_COLORS = {
     "short_circuit": "#2a9d8f",
 }
 DIELECTRIC_COLOR = "#315f52"
+SOLDER_MASK_COLOR = "#2f6f62"
 OUTLINE_COLOR = "#232323"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPORTER_SCRIPT = REPO_ROOT / "modules" / "export_kicad_copper_paths.py"
@@ -56,12 +58,20 @@ EXPORT_OPTION_LABELS = [
     ("trace_layers", "Trace layer STLs"),
     ("via_barrels", "Via barrel STL"),
     ("pad_barrels", "Pad barrel STL"),
+    ("solder_mask_layers", "Solder mask STLs"),
     ("copper_all", "Combined copper STL"),
     ("trace_all", "Combined trace STL"),
     ("via_air", "Via air STL"),
     ("pad_air", "Pad air STL"),
     ("dielectric_layers", "Dielectric layer STLs"),
     ("pcb_parts_all", "Combined PCB parts STL"),
+]
+EXPORT_OPTION_GROUPS = [
+    ("Copper", ["copper_layers", "trace_layers", "via_barrels", "pad_barrels", "copper_all", "trace_all"]),
+    ("FR-4 / Dielectric", ["dielectric_layers"]),
+    ("Solder Mask", ["solder_mask_layers"]),
+    ("Air / Drill Voids", ["via_air", "pad_air"]),
+    ("Combined", ["pcb_parts_all"]),
 ]
 
 
@@ -443,6 +453,30 @@ def export_partition_from_state(
             pad_air_mesh.export(pad_air_path)
             mesh_records.append(MeshRecord(name="pad_air", path=str(pad_air_path), triangle_count=len(pad_air_mesh.faces)))
 
+    for side_name, side_label in (("top", "F.Mask"), ("bottom", "B.Mask")):
+        mask_geometry = create_solder_mask_geometry(
+            model,
+            side_name,
+            board_polygon,
+            track_paths_by_layer=track_paths_by_layer,
+            defects_by_layer=defects_by_layer,
+        )
+        layer_name = mask_layer_order(model, side_name)
+        if layer_name is None:
+            continue
+        if side_name == "top":
+            z_bottom = copper_bounds_for_layer(model, layer_name, z_map)[1]
+        else:
+            z_bottom = copper_bounds_for_layer(model, layer_name, z_map)[0] - SOLDER_MASK_THICKNESS_MM
+        mask_mesh = extrude_geometry(mask_geometry, height_mm=SOLDER_MASK_THICKNESS_MM, z_bottom_mm=z_bottom)
+        if mask_mesh is None:
+            continue
+        partition_meshes.append(mask_mesh)
+        if "solder_mask_layers" in selected_outputs:
+            mask_path = output_dir / f"solder_mask_{side_label.replace('.', '_')}.stl"
+            mask_mesh.export(mask_path)
+            mesh_records.append(MeshRecord(name=f"solder_mask_{side_label}", path=str(mask_path), triangle_count=len(mask_mesh.faces)))
+
     for index in range(len(model.active_layers) - 1):
         upper_layer = model.active_layers[index]
         lower_layer = model.active_layers[index + 1]
@@ -487,6 +521,7 @@ class VedoStackupViewer:
         self.explode_scale = 1.0
         self.visible_layers = {layer: True for layer in model.active_layers}
         self.show_dielectric = True
+        self.show_solder_mask = True
         self.show_tracks = True
         self.show_pads = True
         self.show_vias = True
@@ -523,6 +558,7 @@ class VedoStackupViewer:
         self.layer_actors: dict[str, list] = {}
         self.outline_actors: list = []
         self.dielectric_actors: list = []
+        self.solder_mask_actors: list = []
         self.defect_marker_actors: list = []
         self.defect_region_actors: list = []
         self.selected_defect_actor = None
@@ -530,6 +566,24 @@ class VedoStackupViewer:
         self.defect_list_items: list[DefectListItem] = []
 
         self._build_scene()
+
+    def replace_model(self, model: BoardViewModel, export_output_dir: Path | None = None) -> None:
+        self.model = model
+        if export_output_dir is not None:
+            self.export_output_dir = export_output_dir.expanduser().resolve()
+        self.visible_layers = {layer: True for layer in model.active_layers}
+        self.selected_net = "All nets"
+        self.track_paths_by_layer = {
+            layer: build_connected_track_paths(
+                model,
+                [track for track in model.tracks if track.layer == layer],
+            )
+            for layer in model.active_layers
+        }
+        self.defects_by_layer = {}
+        self.layer_z_map = {}
+        self.defect_list_items = []
+        self._rebuild()
 
     def _build_scene(self) -> None:
         self.plotter.clear()
@@ -539,6 +593,7 @@ class VedoStackupViewer:
         self.layer_actors.clear()
         self.outline_actors.clear()
         self.dielectric_actors.clear()
+        self.solder_mask_actors.clear()
         self.defect_marker_actors.clear()
         self.defect_region_actors.clear()
         self.selected_defect_actor = None
@@ -563,6 +618,10 @@ class VedoStackupViewer:
         if self.show_dielectric:
             self.dielectric_actors = self._create_dielectric_actors(visible_layers)
             self.plotter += self.dielectric_actors
+
+        if self.show_solder_mask:
+            self.solder_mask_actors = self._create_solder_mask_actors()
+            self.plotter += self.solder_mask_actors
 
         if self.show_outline:
             self.outline_actors = self._create_outline_actors()
@@ -650,6 +709,35 @@ class VedoStackupViewer:
                 )
                 if actor is not None:
                     actor.alpha(0.28)
+                    actors.append(actor)
+        return actors
+
+    def _create_solder_mask_actors(self) -> list:
+        actors: list = []
+        board_polygon = build_board_polygon(self.model)
+        for side_name, layer_name in (("top", mask_layer_order(self.model, "top")), ("bottom", mask_layer_order(self.model, "bottom"))):
+            if layer_name is None or not self.visible_layers.get(layer_name, False):
+                continue
+            mask_geometry = create_solder_mask_geometry(
+                self.model,
+                side_name,
+                board_polygon,
+                track_paths_by_layer=self.track_paths_by_layer,
+                defects_by_layer=self.defects_by_layer,
+            )
+            if side_name == "top":
+                z_bottom = copper_bounds_for_layer(self.model, layer_name, self.layer_z_map)[1]
+            else:
+                z_bottom = copper_bounds_for_layer(self.model, layer_name, self.layer_z_map)[0] - SOLDER_MASK_THICKNESS_MM
+            for polygon in iter_polygons(mask_geometry):
+                actor = extrude_polygon_to_vedo_mesh(
+                    polygon=polygon,
+                    z_bottom=z_bottom,
+                    height=SOLDER_MASK_THICKNESS_MM,
+                    color=SOLDER_MASK_COLOR,
+                )
+                if actor is not None:
+                    actor.alpha(0.5)
                     actors.append(actor)
         return actors
 
@@ -772,7 +860,8 @@ class VedoStackupViewer:
             "R: reset explode  |  1-4: toggle layers\n"
             f"Explode: {self.explode_scale:.2f}  |  Visible: {', '.join(visible) or 'none'}\n"
             f"Tracks: {'on' if self.show_tracks else 'off'}  Pads: {'on' if self.show_pads else 'off'}  "
-            f"Vias: {'on' if self.show_vias else 'off'}  Dielectric: {'on' if self.show_dielectric else 'off'}\n"
+            f"Vias: {'on' if self.show_vias else 'off'}  Dielectric: {'on' if self.show_dielectric else 'off'}  "
+            f"Mask: {'on' if self.show_solder_mask else 'off'}\n"
             f"Defects: {len([item for items in self.defects_by_layer.values() for item in items])}  "
             f"Over: {'on' if self.overetch_settings.enabled else 'off'}  Under: {'on' if self.underetch_settings.enabled else 'off'}  "
             f"Bite: {'on' if self.mousebite_settings.enabled else 'off'}  Open: {'on' if self.opencircuit_settings.enabled else 'off'}  "
@@ -785,6 +874,7 @@ class VedoStackupViewer:
         ]
         for layer_name in self.model.active_layers:
             legend_lines.append(f"  {layer_name}: {LAYER_COLORS.get(layer_name, '#666666')}")
+        legend_lines.append(f"Solder mask: {SOLDER_MASK_COLOR}")
         legend_lines.append("Defect colors:")
         legend_lines.append(f"  Over-etch: {DEFECT_COLORS['overetch']}")
         legend_lines.append(f"  Under-etch: {DEFECT_COLORS['underetch']}")
@@ -812,17 +902,19 @@ class VedoStackupViewer:
         self,
         *,
         dielectric: bool,
+        solder_mask: bool,
         tracks: bool,
         pads: bool,
         vias: bool,
         outline: bool,
         defect_regions: bool,
     ) -> None:
-        new_state = (dielectric, tracks, pads, vias, outline, defect_regions)
-        old_state = (self.show_dielectric, self.show_tracks, self.show_pads, self.show_vias, self.show_outline, self.show_defect_regions)
+        new_state = (dielectric, solder_mask, tracks, pads, vias, outline, defect_regions)
+        old_state = (self.show_dielectric, self.show_solder_mask, self.show_tracks, self.show_pads, self.show_vias, self.show_outline, self.show_defect_regions)
         if new_state == old_state:
             return
         self.show_dielectric = dielectric
+        self.show_solder_mask = solder_mask
         self.show_tracks = tracks
         self.show_pads = pads
         self.show_vias = vias
@@ -946,26 +1038,50 @@ class StackupControlPanel:
     def __init__(self, viewer: VedoStackupViewer) -> None:
         self.viewer = viewer
         self.root = tk.Tk()
-        self.root.title("Layer Controls")
-        self.root.geometry("460x780")
-        self.root.minsize(420, 620)
+        self.root.title("PCB Stackup Viewer")
+        self.root.geometry("680x860")
+        self.root.minsize(620, 720)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.scroll_canvas = tk.Canvas(self.root, highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=self.scroll_canvas.yview)
-        self.content_frame = ttk.Frame(self.scroll_canvas, padding=14)
-        self.content_window = self.scroll_canvas.create_window((0, 0), window=self.content_frame, anchor="nw")
-        self.scroll_canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.scroll_canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
-        self.content_frame.bind("<Configure>", self._on_content_configure)
-        self.scroll_canvas.bind("<Configure>", self._on_canvas_configure)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        self.display_tab = ttk.Frame(self.notebook, padding=14)
+        self.defects_tab = ttk.Frame(self.notebook)
+        self.settings_tab = ttk.Frame(self.notebook, padding=14)
+        self.notebook.add(self.display_tab, text="Display")
+        self.notebook.add(self.defects_tab, text="Defects")
+        self.notebook.add(self.settings_tab, text="Settings")
+        self.defects_canvas = tk.Canvas(self.defects_tab, highlightthickness=0)
+        self.defects_scrollbar = ttk.Scrollbar(self.defects_tab, orient="vertical", command=self.defects_canvas.yview)
+        self.defects_content = ttk.Frame(self.defects_canvas, padding=14)
+        self.defects_window = self.defects_canvas.create_window((0, 0), window=self.defects_content, anchor="nw")
+        self.defects_canvas.configure(yscrollcommand=self.defects_scrollbar.set)
+        self.defects_canvas.pack(side="left", fill="both", expand=True)
+        self.defects_scrollbar.pack(side="right", fill="y")
+        self.defects_content.bind("<Configure>", self._on_content_configure)
+        self.defects_canvas.bind("<Configure>", self._on_canvas_configure)
         self._bind_mousewheel()
+        self.board_path_var = tk.StringVar()
+        self.status_var = tk.StringVar()
+        self.layer_vars: dict[str, tk.BooleanVar] = {}
+        self.export_option_vars = {}
+        self.defect_list_window: tk.Toplevel | None = None
+        self.defect_listbox: tk.Listbox | None = None
+        self.inline_defect_listbox: tk.Listbox | None = None
+        self.settings_window: tk.Toplevel | None = None
+        self._sync_vars_from_viewer()
+        self._build_ui()
+        self.viewer.show()
+        self.root.after(16, self._pump_viewer)
 
+    def _sync_vars_from_viewer(self) -> None:
+        self.board_path_var.set(str(self.viewer.model.board_path))
+        self.status_var.set(f"Loaded: {self.viewer.model.board_path.name}")
         self.layer_vars = {
-            layer: tk.BooleanVar(value=True)
+            layer: tk.BooleanVar(value=self.viewer.visible_layers.get(layer, True))
             for layer in self.viewer.model.active_layers
         }
         self.show_dielectric_var = tk.BooleanVar(value=self.viewer.show_dielectric)
+        self.show_solder_mask_var = tk.BooleanVar(value=self.viewer.show_solder_mask)
         self.show_tracks_var = tk.BooleanVar(value=self.viewer.show_tracks)
         self.show_pads_var = tk.BooleanVar(value=self.viewer.show_pads)
         self.show_vias_var = tk.BooleanVar(value=self.viewer.show_vias)
@@ -979,7 +1095,6 @@ class StackupControlPanel:
         self.overetch_noise_var = tk.DoubleVar(value=self.viewer.overetch_settings.noise_amount)
         self.overetch_seed_var = tk.IntVar(value=self.viewer.overetch_settings.seed)
         self.overetch_falloff_var = tk.StringVar(value=self.viewer.overetch_settings.falloff_mode)
-
         self.mousebite_enabled_var = tk.BooleanVar(value=self.viewer.mousebite_settings.enabled)
         self.mousebite_count_var = tk.IntVar(value=self.viewer.mousebite_settings.count)
         self.mousebite_recovery_var = tk.DoubleVar(value=self.viewer.mousebite_settings.recovery_mm)
@@ -987,7 +1102,6 @@ class StackupControlPanel:
         self.mousebite_blob_count_var = tk.IntVar(value=self.viewer.mousebite_settings.blob_count)
         self.mousebite_blob_size_var = tk.DoubleVar(value=self.viewer.mousebite_settings.blob_size_mm)
         self.mousebite_seed_var = tk.IntVar(value=self.viewer.mousebite_settings.seed)
-
         self.underetch_enabled_var = tk.BooleanVar(value=self.viewer.underetch_settings.enabled)
         self.underetch_count_var = tk.IntVar(value=self.viewer.underetch_settings.count)
         self.underetch_severity_var = tk.DoubleVar(value=self.viewer.underetch_settings.severity)
@@ -997,14 +1111,12 @@ class StackupControlPanel:
         self.underetch_blob_size_var = tk.DoubleVar(value=self.viewer.underetch_settings.blob_size_mm)
         self.underetch_seed_var = tk.IntVar(value=self.viewer.underetch_settings.seed)
         self.underetch_falloff_var = tk.StringVar(value=self.viewer.underetch_settings.falloff_mode)
-
         self.opencircuit_enabled_var = tk.BooleanVar(value=self.viewer.opencircuit_settings.enabled)
         self.opencircuit_count_var = tk.IntVar(value=self.viewer.opencircuit_settings.count)
         self.opencircuit_gap_var = tk.DoubleVar(value=self.viewer.opencircuit_settings.gap_mm)
         self.opencircuit_recovery_var = tk.DoubleVar(value=self.viewer.opencircuit_settings.recovery_mm)
         self.opencircuit_noise_var = tk.DoubleVar(value=self.viewer.opencircuit_settings.noise_amount)
         self.opencircuit_seed_var = tk.IntVar(value=self.viewer.opencircuit_settings.seed)
-
         self.shortcircuit_enabled_var = tk.BooleanVar(value=self.viewer.shortcircuit_settings.enabled)
         self.shortcircuit_count_var = tk.IntVar(value=self.viewer.shortcircuit_settings.count)
         self.shortcircuit_gap_var = tk.DoubleVar(value=self.viewer.shortcircuit_settings.max_gap_mm)
@@ -1012,28 +1124,37 @@ class StackupControlPanel:
         self.shortcircuit_noise_var = tk.DoubleVar(value=self.viewer.shortcircuit_settings.noise_amount)
         self.shortcircuit_seed_var = tk.IntVar(value=self.viewer.shortcircuit_settings.seed)
         self.export_option_vars = {
-            option_name: tk.BooleanVar(value=False)
+            option_name: self.export_option_vars.get(option_name, tk.BooleanVar(value=False))
             for option_name, _label in EXPORT_OPTION_LABELS
         }
-        self.defect_list_window: tk.Toplevel | None = None
-        self.defect_listbox: tk.Listbox | None = None
-        self.settings_window: tk.Toplevel | None = None
-
-        self._build_ui()
-        self.viewer.show()
-        self.root.after(16, self._pump_viewer)
 
     def _build_ui(self) -> None:
-        frame = self.content_frame
+        for parent in (self.display_tab, self.defects_content, self.settings_tab):
+            for child in parent.winfo_children():
+                child.destroy()
 
-        ttk.Label(frame, text=self.viewer.model.board_path.stem, font=("Georgia", 18, "bold")).pack(anchor="w")
+        display = self.display_tab
+        defects = self.defects_content
+        settings = self.settings_tab
+
+        ttk.Label(display, text=self.viewer.model.board_path.stem, font=("Georgia", 18, "bold")).pack(anchor="w")
         ttk.Label(
-            frame,
-            text="Choose which material layers are visible in the vedo window.",
-            wraplength=280,
+            display,
+            text="Choose which board and material layers are visible in the vedo window.",
+            wraplength=520,
         ).pack(anchor="w", pady=(4, 14))
 
-        layers_box = ttk.LabelFrame(frame, text="Copper Layers", padding=10)
+        source_box = ttk.LabelFrame(display, text="PCB Source", padding=10)
+        source_box.pack(fill="x", pady=(0, 12))
+        ttk.Label(source_box, text="Current .kicad_pcb", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        ttk.Entry(source_box, textvariable=self.board_path_var).pack(fill="x", pady=(6, 0))
+        source_button_row = ttk.Frame(source_box)
+        source_button_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(source_button_row, text="Browse And Load PCB", command=self._choose_and_load_pcb).pack(side="left", fill="x", expand=True)
+        ttk.Button(source_button_row, text="Reload Current PCB", command=self._reload_current_pcb).pack(side="left", fill="x", expand=True, padx=(8, 0))
+        ttk.Label(source_box, textvariable=self.status_var, wraplength=520).pack(anchor="w", pady=(8, 0))
+
+        layers_box = ttk.LabelFrame(display, text="Copper Layers", padding=10)
         layers_box.pack(fill="x")
         for layer_name in self.viewer.model.active_layers:
             ttk.Checkbutton(
@@ -1043,10 +1164,11 @@ class StackupControlPanel:
                 command=self._apply_layer_visibility,
             ).pack(anchor="w", pady=2)
 
-        extras_box = ttk.LabelFrame(frame, text="Other Geometry", padding=10)
+        extras_box = ttk.LabelFrame(display, text="Other Geometry", padding=10)
         extras_box.pack(fill="x", pady=(12, 0))
         extras = [
             ("Fiberglass / dielectric", self.show_dielectric_var),
+            ("Solder mask (F/B)", self.show_solder_mask_var),
             ("Copper tracks", self.show_tracks_var),
             ("Copper pads", self.show_pads_var),
             ("Vias", self.show_vias_var),
@@ -1061,7 +1183,7 @@ class StackupControlPanel:
                 command=self._apply_extras_visibility,
             ).pack(anchor="w", pady=2)
 
-        explode_box = ttk.LabelFrame(frame, text="Explode Spacing", padding=10)
+        explode_box = ttk.LabelFrame(display, text="Explode Spacing", padding=10)
         explode_box.pack(fill="x", pady=(12, 0))
         ttk.Scale(
             explode_box,
@@ -1074,22 +1196,57 @@ class StackupControlPanel:
         ttk.Label(
             explode_box,
             text="Higher values separate the material stack more clearly.",
-            wraplength=260,
+            wraplength=520,
         ).pack(anchor="w", pady=(6, 0))
+        ttk.Button(display, text="Reset Explode", command=self._reset_explode).pack(fill="x", pady=(14, 0))
 
-        self._build_overetch_box(frame)
-        self._build_mousebite_box(frame)
-        self._build_underetch_box(frame)
-        self._build_opencircuit_box(frame)
-        self._build_shortcircuit_box(frame)
+        ttk.Label(defects, text="Defect Controls", font=("Georgia", 16, "bold")).pack(anchor="w")
+        ttk.Label(
+            defects,
+            text="Adjust defect generation here, then select a defect from the list to focus it in the 3D viewer.",
+            wraplength=520,
+        ).pack(anchor="w", pady=(4, 14))
+        self._build_overetch_box(defects)
+        self._build_mousebite_box(defects)
+        self._build_underetch_box(defects)
+        self._build_opencircuit_box(defects)
+        self._build_shortcircuit_box(defects)
 
-        defect_tools_box = ttk.LabelFrame(frame, text="Defect Browser", padding=10)
-        defect_tools_box.pack(fill="x", pady=(12, 0))
-        ttk.Button(defect_tools_box, text="Show Defect List", command=self._open_defect_list_window).pack(fill="x")
-        ttk.Button(defect_tools_box, text="Export STL Partition", command=self._export_material_partition).pack(fill="x", pady=(8, 0))
-        ttk.Button(defect_tools_box, text="Settings", command=self._open_settings_window).pack(fill="x", pady=(8, 0))
+        defect_browser_box = ttk.LabelFrame(defects, text="Defect Browser", padding=10)
+        defect_browser_box.pack(fill="both", expand=True, pady=(12, 0))
+        ttk.Button(defect_browser_box, text="Refresh Defect List", command=self._refresh_inline_defect_list).pack(fill="x")
+        ttk.Button(defect_browser_box, text="Focus Selected Defect", command=self._focus_selected_inline_defect).pack(fill="x", pady=(8, 0))
+        list_frame = ttk.Frame(defect_browser_box)
+        list_frame.pack(fill="both", expand=True, pady=(10, 0))
+        self.inline_defect_listbox = tk.Listbox(list_frame, activestyle="dotbox", height=12)
+        inline_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.inline_defect_listbox.yview)
+        self.inline_defect_listbox.configure(yscrollcommand=inline_scrollbar.set)
+        self.inline_defect_listbox.pack(side="left", fill="both", expand=True)
+        inline_scrollbar.pack(side="right", fill="y")
+        self.inline_defect_listbox.bind("<<ListboxSelect>>", self._on_inline_defect_select)
+        self._refresh_inline_defect_list()
 
-        ttk.Button(frame, text="Reset Explode", command=self._reset_explode).pack(fill="x", pady=(14, 0))
+        ttk.Label(settings, text="Settings", font=("Georgia", 16, "bold")).pack(anchor="w")
+        ttk.Label(
+            settings,
+            text="Choose which STL outputs to generate when exporting the current partition.",
+            wraplength=520,
+        ).pack(anchor="w", pady=(4, 14))
+        export_box = ttk.LabelFrame(settings, text="Export Outputs", padding=10)
+        export_box.pack(fill="x")
+        label_by_option = dict(EXPORT_OPTION_LABELS)
+        for group_name, option_names in EXPORT_OPTION_GROUPS:
+            group_box = ttk.LabelFrame(export_box, text=group_name, padding=8)
+            group_box.pack(fill="x", pady=(0, 8))
+            for option_name in option_names:
+                label = label_by_option.get(option_name, option_name)
+                ttk.Checkbutton(group_box, text=label, variable=self.export_option_vars[option_name]).pack(anchor="w", pady=2)
+        action_box = ttk.LabelFrame(settings, text="Actions", padding=10)
+        action_box.pack(fill="x", pady=(12, 0))
+        ttk.Button(action_box, text="Export STL Partition", command=self._save_settings).pack(fill="x")
+        ttk.Button(action_box, text="Open Defect Popup List", command=self._open_defect_list_window).pack(fill="x", pady=(8, 0))
+
+        self.defects_canvas.yview_moveto(0.0)
 
     def _make_spinbox(self, parent: ttk.Frame, variable, from_: float, to: float, command) -> ttk.Spinbox:
         spin = ttk.Spinbox(parent, from_=from_, to=to, width=8, textvariable=variable, command=command)
@@ -1171,6 +1328,7 @@ class StackupControlPanel:
     def _apply_extras_visibility(self) -> None:
         self.viewer.set_extras_visibility(
             dielectric=self.show_dielectric_var.get(),
+            solder_mask=self.show_solder_mask_var.get(),
             tracks=self.show_tracks_var.get(),
             pads=self.show_pads_var.get(),
             vias=self.show_vias_var.get(),
@@ -1232,10 +1390,50 @@ class StackupControlPanel:
                 seed=max(0, int(self.shortcircuit_seed_var.get())),
             ),
         )
+        self._refresh_inline_defect_list()
+        self._refresh_defect_listbox()
 
     def _randomize_seed_var(self, variable: tk.IntVar) -> None:
         variable.set(random.randint(0, 999999))
         self._apply_all_defect_settings()
+
+    def _choose_and_load_pcb(self) -> None:
+        current_path = Path(self.board_path_var.get()).expanduser() if self.board_path_var.get().strip() else SOURCE_PCB
+        selected = filedialog.askopenfilename(
+            parent=self.root,
+            title="Choose a KiCad PCB file",
+            initialdir=str(current_path.resolve().parent if current_path.exists() else SOURCE_PCB.parent),
+            filetypes=[("KiCad PCB files", "*.kicad_pcb"), ("All files", "*.*")],
+        )
+        if selected:
+            self._load_pcb(Path(selected))
+
+    def _reload_current_pcb(self) -> None:
+        raw_path = self.board_path_var.get().strip()
+        if not raw_path:
+            messagebox.showerror("Missing file", "No PCB file is selected.", parent=self.root)
+            return
+        self._load_pcb(Path(raw_path))
+
+    def _load_pcb(self, pcb_path: Path) -> None:
+        try:
+            resolved_pcb = pcb_path.expanduser().resolve()
+            if resolved_pcb.suffix.lower() != ".kicad_pcb":
+                raise ExportRefreshError(f"Selected file is not a .kicad_pcb file: {resolved_pcb}")
+            board_key = re.sub(r"[^a-z0-9]+", "_", resolved_pcb.stem.strip().lower()).strip("_") or "board"
+            copper_json = REPO_ROOT / "output" / board_key / "copper_paths.json"
+            defect_output_dir = REPO_ROOT / "output" / board_key / "material_partition_defects"
+            self.status_var.set(f"Loading {resolved_pcb.name}...")
+            self.root.update_idletasks()
+            export_copper_json(resolved_pcb, copper_json)
+            model = load_board_view_model(copper_json)
+            self.viewer.replace_model(model, export_output_dir=defect_output_dir)
+            self._sync_vars_from_viewer()
+            self._build_ui()
+            self.status_var.set(f"Loaded: {resolved_pcb.name}")
+        except Exception as exc:
+            self.status_var.set("Load failed.")
+            messagebox.showerror("PCB Load Failed", str(exc), parent=self.root)
 
     def _reset_explode(self) -> None:
         self.explode_var.set(1.0)
@@ -1322,6 +1520,24 @@ class StackupControlPanel:
         self.defect_list_window = None
         self.defect_listbox = None
 
+    def _refresh_inline_defect_list(self) -> None:
+        if self.inline_defect_listbox is None:
+            return
+        self.inline_defect_listbox.delete(0, tk.END)
+        for item in self.viewer.defect_list_items:
+            self.inline_defect_listbox.insert(tk.END, defect_display_name(item.defect, item.layer_name, item.index))
+
+    def _on_inline_defect_select(self, _event) -> None:
+        self._focus_selected_inline_defect()
+
+    def _focus_selected_inline_defect(self) -> None:
+        if self.inline_defect_listbox is None:
+            return
+        selection = self.inline_defect_listbox.curselection()
+        if not selection:
+            return
+        self.viewer.focus_defect_by_index(int(selection[0]))
+
     def _refresh_defect_listbox(self) -> None:
         if self.defect_listbox is None:
             return
@@ -1346,20 +1562,20 @@ class StackupControlPanel:
         self.root.after(16, self._pump_viewer)
 
     def _on_content_configure(self, _event) -> None:
-        self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
+        self.defects_canvas.configure(scrollregion=self.defects_canvas.bbox("all"))
 
     def _on_canvas_configure(self, event) -> None:
-        self.scroll_canvas.itemconfigure(self.content_window, width=event.width)
+        self.defects_canvas.itemconfigure(self.defects_window, width=event.width)
 
     def _bind_mousewheel(self) -> None:
-        self.scroll_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.scroll_canvas.bind_all("<Button-4>", self._on_mousewheel)
-        self.scroll_canvas.bind_all("<Button-5>", self._on_mousewheel)
+        self.defects_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.defects_canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self.defects_canvas.bind_all("<Button-5>", self._on_mousewheel)
 
     def _unbind_mousewheel(self) -> None:
-        self.scroll_canvas.unbind_all("<MouseWheel>")
-        self.scroll_canvas.unbind_all("<Button-4>")
-        self.scroll_canvas.unbind_all("<Button-5>")
+        self.defects_canvas.unbind_all("<MouseWheel>")
+        self.defects_canvas.unbind_all("<Button-4>")
+        self.defects_canvas.unbind_all("<Button-5>")
 
     def _on_mousewheel(self, event) -> None:
         if getattr(event, "delta", 0):
@@ -1371,7 +1587,7 @@ class StackupControlPanel:
         else:
             step = 0
         if step != 0:
-            self.scroll_canvas.yview_scroll(step, "units")
+            self.defects_canvas.yview_scroll(step, "units")
 
     def _on_close(self) -> None:
         try:
@@ -2563,6 +2779,38 @@ def create_dielectric_slab_polygon(
     return board_polygon.difference(unary_union(subtractors)).buffer(0)
 
 
+def mask_layer_order(model: BoardViewModel, side: str) -> str | None:
+    if side == "top":
+        return "F.Cu" if "F.Cu" in model.active_layers else (model.active_layers[0] if model.active_layers else None)
+    if side == "bottom":
+        return "B.Cu" if "B.Cu" in model.active_layers else (model.active_layers[-1] if model.active_layers else None)
+    return None
+
+
+def create_solder_mask_geometry(
+    model: BoardViewModel,
+    side: str,
+    board_polygon: Polygon,
+    track_paths_by_layer: dict[str, list[tuple[list[tuple[float, float]], float]]] | None = None,
+    defects_by_layer: dict[str, list[TraceDefect]] | None = None,
+) -> Polygon | MultiPolygon | GeometryCollection:
+    layer_name = mask_layer_order(model, side)
+    if layer_name is None:
+        return GeometryCollection()
+    copper_geometry = create_layer_copper_polygon(
+        model=model,
+        layer_name=layer_name,
+        track_paths=None if track_paths_by_layer is None else track_paths_by_layer.get(layer_name, []),
+        defects=None if defects_by_layer is None else defects_by_layer.get(layer_name, []),
+        include_zones=True,
+        include_tracks=True,
+        include_pads=True,
+    ).intersection(board_polygon)
+    if copper_geometry.is_empty:
+        return board_polygon
+    return board_polygon.difference(copper_geometry).buffer(0)
+
+
 def create_pad_polygon(model: BoardViewModel, pad: PadData) -> Polygon:
     center_x, center_y = board_to_centered(model, pad.center_mm)
     if pad.shape == "circle":
@@ -3191,11 +3439,11 @@ def find_kicad_python() -> Path | None:
     return None
 
 
-def refresh_copper_json() -> None:
+def export_copper_json(source_pcb: Path, output_json: Path) -> None:
     if not EXPORTER_SCRIPT.exists():
         raise ExportRefreshError(f"Exporter script not found: {EXPORTER_SCRIPT}")
-    if not SOURCE_PCB.exists():
-        raise ExportRefreshError(f"Source KiCad board not found: {SOURCE_PCB}")
+    if not source_pcb.exists():
+        raise ExportRefreshError(f"Source KiCad board not found: {source_pcb}")
 
     kicad_python = find_kicad_python()
     if kicad_python is None:
@@ -3205,7 +3453,15 @@ def refresh_copper_json() -> None:
             r"  C:\Program Files\KiCad\10.0\bin\python.exe"
         )
 
-    command = [str(kicad_python), str(EXPORTER_SCRIPT)]
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        str(kicad_python),
+        str(EXPORTER_SCRIPT),
+        "--input",
+        str(source_pcb),
+        "--output",
+        str(output_json),
+    ]
     result = subprocess.run(
         command,
         cwd=str(REPO_ROOT),
@@ -3222,6 +3478,10 @@ def refresh_copper_json() -> None:
             f"Command: {' '.join(command)}\n"
             f"Details:\n{details}"
         )
+
+
+def refresh_copper_json() -> None:
+    export_copper_json(SOURCE_PCB, DEFAULT_INPUT)
 
 
 def main() -> None:
