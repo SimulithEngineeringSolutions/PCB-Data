@@ -1,0 +1,76 @@
+{
+  "board_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\DataSet\\KICAD\\Arduino hat\\Arduino_hat.kicad_pcb",
+  "display": {
+    "visible_layers": {
+      "F.Cu": true,
+      "In1.Cu": true,
+      "In2.Cu": true,
+      "B.Cu": true
+    },
+    "show_dielectric": true,
+    "show_solder_mask": true,
+    "show_tracks": true,
+    "show_pads": true,
+    "show_vias": true,
+    "show_outline": true,
+    "show_defect_regions": false,
+    "explode_scale": 1.0
+  },
+  "defects": {
+    "overetch": {
+      "enabled": false,
+      "count": 3,
+      "severity": 0.55,
+      "recovery_mm": 1.2,
+      "falloff_mode": "gaussian",
+      "noise_amount": 0.12,
+      "seed": 1
+    },
+    "mousebite": {
+      "enabled": false,
+      "count": 3,
+      "recovery_mm": 1.0,
+      "noise_amount": 0.15,
+      "blob_count": 4,
+      "blob_size_mm": 0.18,
+      "seed": 101
+    },
+    "underetch": {
+      "enabled": false,
+      "count": 3,
+      "severity": 0.45,
+      "recovery_mm": 1.4,
+      "falloff_mode": "gaussian",
+      "noise_amount": 0.15,
+      "blob_count": 4,
+      "blob_size_mm": 0.16,
+      "seed": 201
+    },
+    "open_circuit": {
+      "enabled": false,
+      "count": 2,
+      "gap_mm": 0.35,
+      "recovery_mm": 0.7,
+      "noise_amount": 0.05,
+      "seed": 301
+    },
+    "short_circuit": {
+      "enabled": false,
+      "count": 2,
+      "max_gap_mm": 0.5,
+      "bridge_width_mm": 0.18,
+      "noise_amount": 0.05,
+      "seed": 401
+    }
+  },
+  "export_outputs": [
+    "copper_all",
+    "dielectric_all"
+  ],
+  "package_name": "PCB_Normal",
+  "package_slug": "pcb_normal",
+  "source_copper_json": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\copper_paths.json",
+  "packaged_copper_json": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\copper_paths.json",
+  "clean_export_dir": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition",
+  "defect_export_dir": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition_defects"
+}

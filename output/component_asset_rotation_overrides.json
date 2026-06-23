@@ -1,0 +1,54 @@
+{
+  "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\DataSet\\KICAD\\Arduino hat\\Arduino_hat.kicad_pcb": {
+    "C4": {
+      "x_deg": 90.0,
+      "y_deg": 0.0,
+      "z_deg": 0.0
+    },
+    "C3": {
+      "x_deg": 90.0,
+      "y_deg": 0.0,
+      "z_deg": 0.0
+    },
+    "R1": {
+      "x_deg": -90.0,
+      "y_deg": 0.0,
+      "z_deg": 0.0
+    },
+    "R2": {
+      "x_deg": -90.0,
+      "y_deg": 0.0,
+      "z_deg": 0.0
+    },
+    "C2": {
+      "x_deg": -90.0,
+      "y_deg": 0.0,
+      "z_deg": 0.0
+    },
+    "J2": {
+      "x_deg": -180.0,
+      "y_deg": 0.0,
+      "z_deg": -90.0
+    },
+    "J1": {
+      "x_deg": 0.0,
+      "y_deg": 180.0,
+      "z_deg": 90.0
+    },
+    "J4": {
+      "x_deg": -180.0,
+      "y_deg": 0.0,
+      "z_deg": -90.0
+    },
+    "BT1": {
+      "x_deg": -180.0,
+      "y_deg": 0.0,
+      "z_deg": -90.0
+    },
+    "J3": {
+      "x_deg": 180.0,
+      "y_deg": 0.0,
+      "z_deg": -360.0
+    }
+  }
+}

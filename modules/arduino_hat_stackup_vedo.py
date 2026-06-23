@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
 import shapely.affinity
 from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon
@@ -54,24 +54,53 @@ COMMON_KICAD_PYTHON_PATHS = (
 )
 DEFAULT_EXPORT_DIR = REPO_ROOT / "output" / "arduino_hat" / "material_partition_live"
 EXPORT_OPTION_LABELS = [
-    ("copper_layers", "Copper layer STLs"),
-    ("trace_layers", "Trace layer STLs"),
-    ("via_barrels", "Via barrel STL"),
-    ("pad_barrels", "Pad barrel STL"),
-    ("solder_mask_layers", "Solder mask STLs"),
-    ("copper_all", "Combined copper STL"),
-    ("trace_all", "Combined trace STL"),
-    ("via_air", "Via air STL"),
-    ("pad_air", "Pad air STL"),
-    ("dielectric_layers", "Dielectric layer STLs"),
-    ("pcb_parts_all", "Combined PCB parts STL"),
+    ("copper_layers", "Individual copper layers"),
+    ("trace_layers", "Individual trace layers"),
+    ("via_barrels", "Via barrel"),
+    ("pad_barrels", "Pad barrel"),
+    ("solder_mask_layers", "Solder mask layers"),
+    ("copper_all", "Combined copper"),
+    ("trace_all", "Combined trace"),
+    ("via_air", "Via air"),
+    ("pad_air", "Pad air"),
+    ("dielectric_layers", "Individual FR-4 layers"),
+    ("dielectric_all", "Combined FR-4"),
+    ("pcb_parts_all", "All PCB parts"),
 ]
-EXPORT_OPTION_GROUPS = [
-    ("Copper", ["copper_layers", "trace_layers", "via_barrels", "pad_barrels", "copper_all", "trace_all"]),
-    ("FR-4 / Dielectric", ["dielectric_layers"]),
-    ("Solder Mask", ["solder_mask_layers"]),
-    ("Air / Drill Voids", ["via_air", "pad_air"]),
-    ("Combined", ["pcb_parts_all"]),
+EXPORT_OPTION_TREE = [
+    (
+        "Copper STL",
+        [
+            ("Trace", ["trace_layers", "trace_all"]),
+            ("Barrel", ["via_barrels", "pad_barrels"]),
+            ("All", ["copper_layers", "copper_all"]),
+        ],
+    ),
+    (
+        "FR-4 / Dielectric STL",
+        [
+            ("Category", ["dielectric_layers"]),
+            ("Category + Option", ["dielectric_all"]),
+        ],
+    ),
+    (
+        "Solder Mask STL",
+        [
+            ("Category", ["solder_mask_layers"]),
+        ],
+    ),
+    (
+        "Air / Drill Void STL",
+        [
+            ("Category", ["via_air", "pad_air"]),
+        ],
+    ),
+    (
+        "Full Assembly",
+        [
+            ("Category + Option", ["pcb_parts_all"]),
+        ],
+    ),
 ]
 
 
@@ -278,6 +307,15 @@ class ExportRefreshError(RuntimeError):
     pass
 
 
+def concatenate_meshes(meshes: list[trimesh.Trimesh]) -> trimesh.Trimesh | None:
+    if not meshes:
+        return None
+    if len(meshes) == 1:
+        mesh = meshes[0]
+        return trimesh.Trimesh(vertices=mesh.vertices.copy(), faces=mesh.faces.copy(), process=False)
+    return trimesh.util.concatenate(meshes)
+
+
 def export_material_partition_with_defects(
     model: BoardViewModel,
     output_dir: Path = DEFAULT_EXPORT_DIR,
@@ -287,6 +325,7 @@ def export_material_partition_with_defects(
     underetch: UnderEtchSettings | None = None,
     opencircuit: OpenCircuitSettings | None = None,
     shortcircuit: ShortCircuitSettings | None = None,
+    selected_outputs: set[str] | None = None,
 ) -> Path:
     track_paths_by_layer = {
         layer: build_connected_track_paths(
@@ -315,6 +354,7 @@ def export_material_partition_with_defects(
         track_paths_by_layer=track_paths_by_layer,
         defects_by_layer=defects_by_layer,
         z_map=z_map,
+        selected_outputs=selected_outputs,
     )
 
 
@@ -327,7 +367,10 @@ def export_partition_from_state(
     z_map: dict[str, float],
     selected_outputs: set[str] | None = None,
 ) -> Path:
-    selected_outputs = set(selected_outputs or {name for name, _label in EXPORT_OPTION_LABELS})
+    if selected_outputs is None:
+        selected_outputs = {name for name, _label in EXPORT_OPTION_LABELS}
+    else:
+        selected_outputs = set(selected_outputs)
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     board_polygon = build_board_polygon(model)
@@ -336,6 +379,7 @@ def export_partition_from_state(
     trace_meshes: list[trimesh.Trimesh] = []
     layer_mesh_by_name: dict[str, trimesh.Trimesh] = {}
     partition_meshes: list[trimesh.Trimesh] = []
+    dielectric_meshes: list[trimesh.Trimesh] = []
 
     for layer_name in model.active_layers:
         copper_thickness_mm = copper_thickness_for_layer(model, layer_name)
@@ -491,13 +535,26 @@ def export_partition_from_state(
             continue
         slab_name = f"fr4_{upper_layer.replace('.', '_')}_to_{lower_layer.replace('.', '_')}"
         partition_meshes.append(mesh)
+        dielectric_meshes.append(mesh)
         if "dielectric_layers" in selected_outputs:
             path = output_dir / f"{slab_name}.stl"
             mesh.export(path)
             mesh_records.append(MeshRecord(name=slab_name, path=str(path), triangle_count=len(mesh.faces)))
 
+    dielectric_all_mesh = concatenate_meshes(dielectric_meshes)
+    if dielectric_all_mesh is not None and "dielectric_all" in selected_outputs:
+        dielectric_all_path = output_dir / "fr4_all.stl"
+        dielectric_all_mesh.export(dielectric_all_path)
+        mesh_records.append(
+            MeshRecord(
+                name="fr4_all",
+                path=str(dielectric_all_path),
+                triangle_count=len(dielectric_all_mesh.faces),
+            )
+        )
+
     if partition_meshes:
-        pcb_parts_all_mesh = trimesh.util.concatenate(partition_meshes)
+        pcb_parts_all_mesh = concatenate_meshes(partition_meshes)
         if "pcb_parts_all" in selected_outputs:
             pcb_parts_all_path = output_dir / "pcb_parts_all.stl"
             pcb_parts_all_mesh.export(pcb_parts_all_path)
@@ -1035,8 +1092,15 @@ class VedoStackupViewer:
 
 
 class StackupControlPanel:
-    def __init__(self, viewer: VedoStackupViewer) -> None:
+    def __init__(
+        self,
+        viewer: VedoStackupViewer,
+        *,
+        initial_package_name: str = "",
+        save_package_callback: Callable[[str, dict[str, Any], set[str]], Path] | None = None,
+    ) -> None:
         self.viewer = viewer
+        self.save_package_callback = save_package_callback
         self.root = tk.Tk()
         self.root.title("PCB Stackup Viewer")
         self.root.geometry("680x860")
@@ -1046,7 +1110,7 @@ class StackupControlPanel:
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
         self.display_tab = ttk.Frame(self.notebook, padding=14)
         self.defects_tab = ttk.Frame(self.notebook)
-        self.settings_tab = ttk.Frame(self.notebook, padding=14)
+        self.settings_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.display_tab, text="Display")
         self.notebook.add(self.defects_tab, text="Defects")
         self.notebook.add(self.settings_tab, text="Settings")
@@ -1057,17 +1121,27 @@ class StackupControlPanel:
         self.defects_canvas.configure(yscrollcommand=self.defects_scrollbar.set)
         self.defects_canvas.pack(side="left", fill="both", expand=True)
         self.defects_scrollbar.pack(side="right", fill="y")
+        self.settings_canvas = tk.Canvas(self.settings_tab, highlightthickness=0)
+        self.settings_scrollbar = ttk.Scrollbar(self.settings_tab, orient="vertical", command=self.settings_canvas.yview)
+        self.settings_content = ttk.Frame(self.settings_canvas, padding=14)
+        self.settings_window = self.settings_canvas.create_window((0, 0), window=self.settings_content, anchor="nw")
+        self.settings_canvas.configure(yscrollcommand=self.settings_scrollbar.set)
+        self.settings_canvas.pack(side="left", fill="both", expand=True)
+        self.settings_scrollbar.pack(side="right", fill="y")
         self.defects_content.bind("<Configure>", self._on_content_configure)
         self.defects_canvas.bind("<Configure>", self._on_canvas_configure)
+        self.settings_content.bind("<Configure>", self._on_settings_content_configure)
+        self.settings_canvas.bind("<Configure>", self._on_settings_canvas_configure)
         self._bind_mousewheel()
         self.board_path_var = tk.StringVar()
         self.status_var = tk.StringVar()
+        self.package_name_var = tk.StringVar(value=initial_package_name)
         self.layer_vars: dict[str, tk.BooleanVar] = {}
         self.export_option_vars = {}
         self.defect_list_window: tk.Toplevel | None = None
         self.defect_listbox: tk.Listbox | None = None
         self.inline_defect_listbox: tk.Listbox | None = None
-        self.settings_window: tk.Toplevel | None = None
+        self.settings_popup_window: tk.Toplevel | None = None
         self._sync_vars_from_viewer()
         self._build_ui()
         self.viewer.show()
@@ -1129,13 +1203,13 @@ class StackupControlPanel:
         }
 
     def _build_ui(self) -> None:
-        for parent in (self.display_tab, self.defects_content, self.settings_tab):
+        for parent in (self.display_tab, self.defects_content, self.settings_content):
             for child in parent.winfo_children():
                 child.destroy()
 
         display = self.display_tab
         defects = self.defects_content
-        settings = self.settings_tab
+        settings = self.settings_content
 
         ttk.Label(display, text=self.viewer.model.board_path.stem, font=("Georgia", 18, "bold")).pack(anchor="w")
         ttk.Label(
@@ -1229,24 +1303,44 @@ class StackupControlPanel:
         ttk.Label(settings, text="Settings", font=("Georgia", 16, "bold")).pack(anchor="w")
         ttk.Label(
             settings,
-            text="Choose which STL outputs to generate when exporting the current partition.",
+            text="Save the current package name, export choices, and defect settings from here.",
             wraplength=520,
         ).pack(anchor="w", pady=(4, 14))
+        package_box = ttk.LabelFrame(settings, text="PCB Package", padding=10)
+        package_box.pack(fill="x", pady=(0, 12))
+        ttk.Label(package_box, text="Package Name", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        ttk.Entry(package_box, textvariable=self.package_name_var).pack(fill="x", pady=(6, 0))
+        ttk.Label(
+            package_box,
+            text="Example: PCB1. Saving will export clean and defect STL packages plus a settings snapshot.",
+            wraplength=520,
+        ).pack(anchor="w", pady=(8, 0))
         export_box = ttk.LabelFrame(settings, text="Export Outputs", padding=10)
         export_box.pack(fill="x")
         label_by_option = dict(EXPORT_OPTION_LABELS)
-        for group_name, option_names in EXPORT_OPTION_GROUPS:
-            group_box = ttk.LabelFrame(export_box, text=group_name, padding=8)
-            group_box.pack(fill="x", pady=(0, 8))
-            for option_name in option_names:
-                label = label_by_option.get(option_name, option_name)
-                ttk.Checkbutton(group_box, text=label, variable=self.export_option_vars[option_name]).pack(anchor="w", pady=2)
+        for category_name, sections in EXPORT_OPTION_TREE:
+            category_box = ttk.LabelFrame(export_box, text=category_name, padding=8)
+            category_box.pack(fill="x", pady=(0, 8))
+            for section_name, option_names in sections:
+                section_box = ttk.Frame(category_box)
+                section_box.pack(fill="x", pady=(2, 6))
+                ttk.Label(section_box, text=section_name, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+                option_box = ttk.Frame(section_box)
+                option_box.pack(fill="x", padx=(18, 0), pady=(2, 0))
+                for option_name in option_names:
+                    label = label_by_option.get(option_name, option_name)
+                    ttk.Checkbutton(
+                        option_box,
+                        text=label,
+                        variable=self.export_option_vars[option_name],
+                    ).pack(anchor="w", pady=2)
         action_box = ttk.LabelFrame(settings, text="Actions", padding=10)
         action_box.pack(fill="x", pady=(12, 0))
-        ttk.Button(action_box, text="Export STL Partition", command=self._save_settings).pack(fill="x")
+        ttk.Button(action_box, text="Save Current Settings", command=self._save_settings).pack(fill="x")
         ttk.Button(action_box, text="Open Defect Popup List", command=self._open_defect_list_window).pack(fill="x", pady=(8, 0))
 
         self.defects_canvas.yview_moveto(0.0)
+        self.settings_canvas.yview_moveto(0.0)
 
     def _make_spinbox(self, parent: ttk.Frame, variable, from_: float, to: float, command) -> ttk.Spinbox:
         spin = ttk.Spinbox(parent, from_=from_, to=to, width=8, textvariable=variable, command=command)
@@ -1448,9 +1542,9 @@ class StackupControlPanel:
         messagebox.showinfo("Export Complete", f"Exported current STL partition to:\n{output_dir}")
 
     def _open_settings_window(self) -> None:
-        if self.settings_window is not None and self.settings_window.winfo_exists():
-            self.settings_window.lift()
-            self.settings_window.focus_force()
+        if self.settings_popup_window is not None and self.settings_popup_window.winfo_exists():
+            self.settings_popup_window.lift()
+            self.settings_popup_window.focus_force()
             return
         window = tk.Toplevel(self.root)
         window.title("Settings")
@@ -1465,7 +1559,7 @@ class StackupControlPanel:
         for option_name, label in EXPORT_OPTION_LABELS:
             ttk.Checkbutton(frame, text=label, variable=self.export_option_vars[option_name]).pack(anchor="w", pady=2)
         ttk.Button(frame, text="Save", command=self._save_settings).pack(fill="x", pady=(16, 0))
-        self.settings_window = window
+        self.settings_popup_window = window
 
     def _save_settings(self) -> None:
         selected_outputs = {
@@ -1473,6 +1567,24 @@ class StackupControlPanel:
             for option_name, variable in self.export_option_vars.items()
             if variable.get()
         }
+        if self.save_package_callback is not None:
+            package_name = self.package_name_var.get().strip()
+            if not package_name:
+                messagebox.showerror("Missing Package Name", "Enter a PCB package name in the Settings tab.", parent=self.root)
+                return
+            try:
+                package_root = self.save_package_callback(
+                    package_name,
+                    self._current_settings_payload(),
+                    selected_outputs,
+                )
+            except Exception as exc:
+                messagebox.showerror("Save Failed", f"Could not save the PCB package.\n\n{exc}", parent=self.root)
+                return
+            self._close_settings_window()
+            messagebox.showinfo("Settings Saved", f"Saved current settings and package files in:\n{package_root}", parent=self.root)
+            return
+
         if selected_outputs:
             try:
                 output_dir = self.viewer.export_current_material_partition(selected_outputs=selected_outputs)
@@ -1485,10 +1597,39 @@ class StackupControlPanel:
         self._close_settings_window()
         messagebox.showinfo("Settings Saved", "Settings saved.")
 
+    def _current_settings_payload(self) -> dict[str, Any]:
+        return {
+            "board_path": str(self.viewer.model.board_path),
+            "display": {
+                "visible_layers": {
+                    layer_name: variable.get()
+                    for layer_name, variable in self.layer_vars.items()
+                },
+                "show_dielectric": self.show_dielectric_var.get(),
+                "show_solder_mask": self.show_solder_mask_var.get(),
+                "show_tracks": self.show_tracks_var.get(),
+                "show_pads": self.show_pads_var.get(),
+                "show_vias": self.show_vias_var.get(),
+                "show_outline": self.show_outline_var.get(),
+                "show_defect_regions": self.show_defect_regions_var.get(),
+                "explode_scale": float(self.explode_var.get()),
+            },
+            "defects": {
+                "overetch": asdict(self.viewer.overetch_settings),
+                "mousebite": asdict(self.viewer.mousebite_settings),
+                "underetch": asdict(self.viewer.underetch_settings),
+                "open_circuit": asdict(self.viewer.opencircuit_settings),
+                "short_circuit": asdict(self.viewer.shortcircuit_settings),
+            },
+            "export_outputs": sorted(selected for selected in (
+                option_name for option_name, variable in self.export_option_vars.items() if variable.get()
+            )),
+        }
+
     def _close_settings_window(self) -> None:
-        if self.settings_window is not None and self.settings_window.winfo_exists():
-            self.settings_window.destroy()
-        self.settings_window = None
+        if self.settings_popup_window is not None and self.settings_popup_window.winfo_exists():
+            self.settings_popup_window.destroy()
+        self.settings_popup_window = None
 
     def _open_defect_list_window(self) -> None:
         if self.defect_list_window is not None and self.defect_list_window.winfo_exists():
@@ -1567,6 +1708,12 @@ class StackupControlPanel:
     def _on_canvas_configure(self, event) -> None:
         self.defects_canvas.itemconfigure(self.defects_window, width=event.width)
 
+    def _on_settings_content_configure(self, _event) -> None:
+        self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+
+    def _on_settings_canvas_configure(self, event) -> None:
+        self.settings_canvas.itemconfigure(self.settings_window, width=event.width)
+
     def _bind_mousewheel(self) -> None:
         self.defects_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
         self.defects_canvas.bind_all("<Button-4>", self._on_mousewheel)
@@ -1578,6 +1725,13 @@ class StackupControlPanel:
         self.defects_canvas.unbind_all("<Button-5>")
 
     def _on_mousewheel(self, event) -> None:
+        current_tab = self.notebook.select()
+        if current_tab == str(self.settings_tab):
+            target_canvas = self.settings_canvas
+        elif current_tab == str(self.defects_tab):
+            target_canvas = self.defects_canvas
+        else:
+            return
         if getattr(event, "delta", 0):
             step = -1 * int(event.delta / 120) if event.delta else 0
         elif getattr(event, "num", None) == 4:
@@ -1587,7 +1741,7 @@ class StackupControlPanel:
         else:
             step = 0
         if step != 0:
-            self.defects_canvas.yview_scroll(step, "units")
+            target_canvas.yview_scroll(step, "units")
 
     def _on_close(self) -> None:
         try:

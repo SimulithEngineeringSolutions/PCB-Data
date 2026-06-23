@@ -1,0 +1,29 @@
+{
+  "component_family": "capacitor",
+  "component_name": "generic_capacitor",
+  "source_project_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\part_generator\\PCB parts\\SMD Capacitor.json",
+  "native_bbox_mm": {
+    "x": 2.0,
+    "y": 0.6,
+    "z": 1.0
+  },
+  "native_center_mm": {
+    "x": 0.0,
+    "y": -4.440892098500626e-16,
+    "z": 0.5
+  },
+  "parts": [
+    {
+      "part_name": "Contact terminals",
+      "stl_path": "..\\part_generator\\exports\\contact_terminals.stl",
+      "color": "#c0c0c0",
+      "height_mm": 1.0
+    },
+    {
+      "part_name": "Ceramic Dieletric layer",
+      "stl_path": "..\\part_generator\\exports\\ceramic_dieletric_layer.stl",
+      "color": "#ca763e",
+      "height_mm": 1.0
+    }
+  ]
+}

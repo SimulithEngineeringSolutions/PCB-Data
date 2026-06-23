@@ -1,0 +1,27 @@
+{
+  "hotkeys": {
+    "create_new_part": "",
+    "save_part": "",
+    "delete_active_part": "",
+    "undo_point": "<KeyPress-b>",
+    "undo_last_action": "<Control-z>",
+    "finish_closed_shape": "<Return>",
+    "finish_open_line": "",
+    "cancel_draft": "<Escape>",
+    "assign_selected_to_active_part": "",
+    "delete_selected_contour": "",
+    "center_selected_contour": "",
+    "mirror_selected_x": "",
+    "mirror_selected_y": "",
+    "pick_distance_points": "<d>",
+    "apply_distance_mate": "",
+    "clear_distance_mate_points": "<Shift-D>",
+    "pick_parallel_lines": "<w>",
+    "apply_parallel_line_distance": "<e>",
+    "clear_parallel_line_points": "<Shift-W>",
+    "save_project": "",
+    "load_project": "",
+    "preview_3d": "",
+    "export_stls": ""
+  }
+}

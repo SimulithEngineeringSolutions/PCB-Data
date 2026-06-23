@@ -1,0 +1,36 @@
+{
+  "component_family": "connector",
+  "component_name": "j3_female_pin_2x3",
+  "native_bbox_mm": {
+    "x": 5.079999923706055,
+    "y": 7.619999885559082,
+    "z": 8.5
+  },
+  "native_center_mm": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": -4.25
+  },
+  "native_rotation_deg": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "fit_part_names": [
+    "holder"
+  ],
+  "parts": [
+    {
+      "part_name": "holder",
+      "stl_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\female_pin_arrays\\J3_2x3\\female_pin_holder_array.stl",
+      "color": "#202020",
+      "height_mm": 8.5
+    },
+    {
+      "part_name": "contact",
+      "stl_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\female_pin_arrays\\J3_2x3\\female_pin_contact_array.stl",
+      "color": "#d08a35",
+      "height_mm": 8.5
+    }
+  ]
+}

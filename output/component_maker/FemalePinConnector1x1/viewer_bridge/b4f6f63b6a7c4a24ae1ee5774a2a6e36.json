@@ -1,0 +1,11 @@
+{
+  "pin_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\ConnectorPin\\connector Pin.stl",
+  "spec": {
+    "outer_square_side_length_mm": 2.1,
+    "inner_square_tube_thickness_mm": 0.8,
+    "z_start_mm": -1.7,
+    "z_end_mm": 4.5
+  },
+  "status_message": "Plastic subtraction settings look valid.",
+  "summary_message": "Pin normalized to origin at centroid.\nPin size: 1.949 X x 0.390 Y x 8.830 Z mm\nPlastic tube: 2.100 outer side, 0.500 inner side, Z [-1.700, 4.500] mm\nPin enlargement before subtraction: 0.001 mm\nLargest remaining plastic body will be kept after boolean subtraction."
+}

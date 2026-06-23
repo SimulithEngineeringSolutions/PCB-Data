@@ -1,0 +1,112 @@
+{
+  "source": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\DataSet\\KICAD\\Arduino hat\\Arduino_hat.kicad_pcb",
+  "clearance_mm": 0.01,
+  "copper_thickness_mm": 0.035,
+  "meshes": [
+    {
+      "name": "trace_F.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\trace_F_Cu.stl",
+      "triangle_count": 1740
+    },
+    {
+      "name": "copper_F.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\copper_F_Cu.stl",
+      "triangle_count": 6816
+    },
+    {
+      "name": "trace_In1.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\trace_In1_Cu.stl",
+      "triangle_count": 412
+    },
+    {
+      "name": "copper_In1.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\copper_In1_Cu.stl",
+      "triangle_count": 3348
+    },
+    {
+      "name": "trace_In2.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\trace_In2_Cu.stl",
+      "triangle_count": 508
+    },
+    {
+      "name": "copper_In2.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\copper_In2_Cu.stl",
+      "triangle_count": 3484
+    },
+    {
+      "name": "copper_B.Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\copper_B_Cu.stl",
+      "triangle_count": 3000
+    },
+    {
+      "name": "via_barrels",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\via_barrels.stl",
+      "triangle_count": 3360
+    },
+    {
+      "name": "pad_barrels",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\pad_barrels.stl",
+      "triangle_count": 12000
+    },
+    {
+      "name": "copper_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\copper_all.stl",
+      "triangle_count": 24458
+    },
+    {
+      "name": "trace_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\trace_all.stl",
+      "triangle_count": 2660
+    },
+    {
+      "name": "via_air",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\via_air.stl",
+      "triangle_count": 504
+    },
+    {
+      "name": "pad_air",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\pad_air.stl",
+      "triangle_count": 900
+    },
+    {
+      "name": "solder_mask_F.Mask",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\solder_mask_F_Mask.stl",
+      "triangle_count": 7204
+    },
+    {
+      "name": "solder_mask_B.Mask",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\solder_mask_B_Mask.stl",
+      "triangle_count": 3268
+    },
+    {
+      "name": "fr4_F_Cu_to_In1_Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\fr4_F_Cu_to_In1_Cu.stl",
+      "triangle_count": 7984
+    },
+    {
+      "name": "fr4_In1_Cu_to_In2_Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\fr4_In1_Cu_to_In2_Cu.stl",
+      "triangle_count": 7984
+    },
+    {
+      "name": "fr4_In2_Cu_to_B_Cu",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\fr4_In2_Cu_to_B_Cu.stl",
+      "triangle_count": 7984
+    },
+    {
+      "name": "fr4_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\fr4_all.stl",
+      "triangle_count": 23952
+    },
+    {
+      "name": "pcb_parts_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\pcb_parts_all.stl",
+      "triangle_count": 58882
+    },
+    {
+      "name": "material_partition_glb",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\material_partition.glb",
+      "triangle_count": 0
+    }
+  ]
+}

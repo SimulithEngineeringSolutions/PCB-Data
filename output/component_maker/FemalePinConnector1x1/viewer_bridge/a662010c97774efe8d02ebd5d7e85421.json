@@ -1,0 +1,11 @@
+{
+  "pin_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\ConnectorPin\\connector Pin.stl",
+  "spec": {
+    "outer_square_side_length_mm": 2.2,
+    "inner_square_tube_thickness_mm": 0.4,
+    "z_start_mm": -3.0,
+    "z_end_mm": 5.0
+  },
+  "status_message": "outer_square_side_length_mm=2.200 is too small. Need more than 2.749 mm for the current pin cross-section.",
+  "summary_message": "Status: current dimensions are not valid yet."
+}

@@ -1,0 +1,11 @@
+{
+  "parts": [
+    {
+      "name": "Ceramic Core",
+      "color": "#d38b5d",
+      "height_mm": 0.25
+    }
+  ],
+  "contours": [],
+  "status_message": "Viewer launched."
+}

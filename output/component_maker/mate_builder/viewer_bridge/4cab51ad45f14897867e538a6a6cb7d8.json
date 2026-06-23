@@ -1,0 +1,158 @@
+{
+  "moving_part_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\ConnectorPin\\connector Pin.stl",
+  "fixed_part_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\ConnectorPin\\Plastic Covering.stl",
+  "moving_pair": {
+    "triangle_a": {
+      "face_index": 52,
+      "centroid_mm": [
+        0.05830544819867001,
+        -1.3479927378413423,
+        0.19500000053085387
+      ],
+      "normal": [
+        -0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "triangle_b": {
+      "face_index": 30,
+      "centroid_mm": [
+        -0.05836133072341099,
+        -1.347992737841342,
+        -0.19500000053085387
+      ],
+      "normal": [
+        -0.0,
+        0.0,
+        -1.0
+      ]
+    },
+    "center_point_mm": [
+      -2.7941262370489994e-05,
+      -1.3479927378413423,
+      0.0
+    ],
+    "plane_normal": [
+      0.0,
+      0.0,
+      1.0
+    ]
+  },
+  "fixed_pair": {
+    "triangle_a": {
+      "face_index": 39,
+      "centroid_mm": [
+        0.4233333180945409,
+        -1.2000000569969416,
+        1.383423291453355
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    "triangle_b": {
+      "face_index": 16,
+      "centroid_mm": [
+        -0.4233333150569307,
+        1.2000000569969416,
+        1.383423291453355
+      ],
+      "normal": [
+        -0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "center_point_mm": [
+      1.5188050817016574e-09,
+      0.0,
+      1.383423291453355
+    ],
+    "plane_normal": [
+      0.0,
+      -1.0,
+      0.0
+    ]
+  },
+  "contact_moving_pair": {
+    "triangle_a": {
+      "face_index": 89,
+      "centroid_mm": [
+        -0.27502793977225437,
+        -1.681326087007158,
+        -0.06500000017695129
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    "triangle_b": {
+      "face_index": 88,
+      "centroid_mm": [
+        -0.37502776989901676,
+        -1.681326087007158,
+        0.06500000017695129
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    "center_point_mm": [
+      -0.32502785483563557,
+      -1.681326087007158,
+      0.0
+    ],
+    "plane_normal": [
+      0.0,
+      -1.0,
+      0.0
+    ]
+  },
+  "contact_fixed_pair": {
+    "triangle_a": {
+      "face_index": 15,
+      "centroid_mm": [
+        -0.4233333150569307,
+        0.7000000138456622,
+        -4.149909916648136
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ]
+    },
+    "triangle_b": {
+      "face_index": 14,
+      "centroid_mm": [
+        0.4233333180945409,
+        0.950000035421302,
+        -4.149909916648136
+      ],
+      "normal": [
+        -0.0,
+        -0.0,
+        -1.0
+      ]
+    },
+    "center_point_mm": [
+      1.5188050817016574e-09,
+      0.8250000246334821,
+      -4.149909916648136
+    ],
+    "plane_normal": [
+      0.0,
+      0.0,
+      -1.0
+    ]
+  },
+  "status_message": "Center mate + contact mate solved.",
+  "summary_message": "Connector pin pair: faces 52, 30\nConnector pin normals: (-0.000, 0.000, 1.000) and (-0.000, 0.000, -1.000)\nPlastic covering pair: faces 39, 16\nPlastic covering normals: (0.000, -1.000, 0.000) and (-0.000, 1.000, 0.000)\nCenter-plane normal: 0.000, -1.000, 0.000\nCenter-mate transform:\n[1.000, 0.000, 0.000, 0.000]\n[0.000, 0.000, -1.000, 0.000]\n[0.000, 1.000, 0.000, 0.000]\nContact pin pair: faces 89, 88\nContact pin normals: (0.000, -1.000, 0.000) and (0.000, -1.000, 0.000)\nContact plastic pair: faces 15, 14\nContact plastic normals: (0.000, 0.000, -1.000) and (-0.000, -0.000, -1.000)\nFull transform after contact mate:\n[1.000, 0.000, 0.000, 0.000]\n[0.000, 0.000, -1.000, 0.000]\n[0.000, 1.000, 0.000, -2.469]"
+}

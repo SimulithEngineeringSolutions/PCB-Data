@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -27,6 +28,7 @@ from modules.export_material_partition import export_material_partition
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_INPUT_PCB = REPO_ROOT / "DataSet" / "KICAD" / "Arduino hat" / "Arduino_hat.kicad_pcb"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output"
+DEFAULT_PCB_LIBRARY_DIR = DEFAULT_OUTPUT_ROOT / "pcb_library"
 DEFAULT_CLEARANCE_MM = 0.01
 
 
@@ -130,13 +132,69 @@ def slugify_board_name(board_path: Path) -> str:
     return slug or "board"
 
 
-def build_output_paths(board_path: Path, copper_json: Path | None, stl_output_dir: Path | None, defect_output_dir: Path | None) -> tuple[Path, Path, Path]:
+def slugify_package_name(name: str) -> str:
+    raw_name = name.strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", raw_name).strip("_")
+    return slug or "pcb"
+
+
+def build_output_paths(
+    board_path: Path,
+    copper_json: Path | None,
+    stl_output_dir: Path | None,
+    defect_output_dir: Path | None,
+    pcb_package_name: str | None,
+) -> tuple[Path, Path, Path, Path | None]:
+    if pcb_package_name:
+        package_root = DEFAULT_PCB_LIBRARY_DIR / slugify_package_name(pcb_package_name)
+        resolved_copper_json = copper_json.expanduser().resolve() if copper_json is not None else (package_root / "copper_paths.json")
+        resolved_stl_output_dir = stl_output_dir.expanduser().resolve() if stl_output_dir is not None else (package_root / "material_partition")
+        resolved_defect_output_dir = defect_output_dir.expanduser().resolve() if defect_output_dir is not None else (package_root / "material_partition_defects")
+        return resolved_copper_json, resolved_stl_output_dir, resolved_defect_output_dir, package_root
+
     board_key = slugify_board_name(board_path)
     board_output_root = DEFAULT_OUTPUT_ROOT / board_key
     resolved_copper_json = copper_json.expanduser().resolve() if copper_json is not None else (board_output_root / "copper_paths.json")
     resolved_stl_output_dir = stl_output_dir.expanduser().resolve() if stl_output_dir is not None else (board_output_root / "material_partition")
     resolved_defect_output_dir = defect_output_dir.expanduser().resolve() if defect_output_dir is not None else (board_output_root / "material_partition_defects")
-    return resolved_copper_json, resolved_stl_output_dir, resolved_defect_output_dir
+    return resolved_copper_json, resolved_stl_output_dir, resolved_defect_output_dir, None
+
+
+def write_pcb_package_manifest(
+    package_root: Path,
+    *,
+    package_name: str,
+    input_pcb: Path,
+    copper_json: Path,
+    stl_output_dir: Path,
+    defect_output_dir: Path,
+    settings_path: Path | None = None,
+) -> Path:
+    package_root.mkdir(parents=True, exist_ok=True)
+    clean_manifest_path = stl_output_dir / "material_partition_manifest.json"
+    defect_manifest_path = defect_output_dir / "material_partition_manifest.json"
+    payload = {
+        "package_name": package_name,
+        "source_pcb": str(input_pcb),
+        "copper_json": str(copper_json),
+        "clean_export_dir": str(stl_output_dir),
+        "defect_export_dir": str(defect_output_dir),
+        "variants": {
+            "clean": str(clean_manifest_path) if clean_manifest_path.exists() else "",
+            "defect": str(defect_manifest_path) if defect_manifest_path.exists() else "",
+        },
+        "settings_snapshot": str(settings_path) if settings_path is not None and settings_path.exists() else "",
+    }
+    manifest_path = package_root / "pcb_package_manifest.json"
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return manifest_path
+
+
+def write_pcb_settings_snapshot(package_root: Path, payload: dict) -> Path:
+    package_root.mkdir(parents=True, exist_ok=True)
+    settings_path = package_root / "pcb_package_settings.json"
+    settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return settings_path
 
 
 def run_extract(input_pcb: Path, copper_json: Path, kicad_python: str | None, log_level: str) -> None:
@@ -162,14 +220,100 @@ def run_extract(input_pcb: Path, copper_json: Path, kicad_python: str | None, lo
         raise PipelineError(f"Extractor failed.\nCommand: {' '.join(command)}\n{details}")
 
 
-def run_base_stl_export(copper_json: Path, output_dir: Path, clearance_mm: float) -> None:
+def run_base_stl_export(copper_json: Path, output_dir: Path, clearance_mm: float) -> Path:
     export_material_partition(copper_json, output_dir, clearance_mm)
+    return output_dir / "material_partition_manifest.json"
 
 
-def run_viewer(copper_json: Path, defect_output_dir: Path) -> None:
+def save_pcb_package_from_viewer(
+    *,
+    input_pcb: Path,
+    package_name: str,
+    settings_payload: dict,
+    selected_outputs: set[str],
+    clearance_mm: float,
+    kicad_python: str | None,
+    log_level: str,
+    source_copper_json: Path,
+) -> Path:
+    package_slug = slugify_package_name(package_name)
+    package_root = DEFAULT_PCB_LIBRARY_DIR / package_slug
+    copper_json, stl_output_dir, defect_output_dir, _unused_package_root = build_output_paths(
+        input_pcb,
+        None,
+        None,
+        None,
+        package_slug,
+    )
+    run_extract(input_pcb, copper_json, kicad_python, log_level)
+    run_base_stl_export(copper_json, stl_output_dir, clearance_mm)
+    model = load_board_view_model(copper_json)
+    export_material_partition_with_defects(
+        model,
+        output_dir=defect_output_dir,
+        overetch=OverEtchSettings(**settings_payload["defects"]["overetch"]),
+        mousebite=MouseBiteSettings(**settings_payload["defects"]["mousebite"]),
+        underetch=UnderEtchSettings(**settings_payload["defects"]["underetch"]),
+        opencircuit=OpenCircuitSettings(**settings_payload["defects"]["open_circuit"]),
+        shortcircuit=ShortCircuitSettings(**settings_payload["defects"]["short_circuit"]),
+        selected_outputs=selected_outputs or None,
+    )
+    settings_payload = dict(settings_payload)
+    settings_payload.update(
+        {
+            "package_name": package_name,
+            "package_slug": package_slug,
+            "source_copper_json": str(source_copper_json),
+            "packaged_copper_json": str(copper_json),
+            "clean_export_dir": str(stl_output_dir),
+            "defect_export_dir": str(defect_output_dir),
+        }
+    )
+    settings_path = write_pcb_settings_snapshot(package_root, settings_payload)
+    write_pcb_package_manifest(
+        package_root,
+        package_name=package_name,
+        input_pcb=input_pcb,
+        copper_json=copper_json,
+        stl_output_dir=stl_output_dir,
+        defect_output_dir=defect_output_dir,
+        settings_path=settings_path,
+    )
+    return package_root
+
+
+def run_viewer(
+    copper_json: Path,
+    defect_output_dir: Path,
+    *,
+    input_pcb: Path,
+    clearance_mm: float,
+    kicad_python: str | None,
+    log_level: str,
+    initial_package_name: str = "",
+) -> None:
     model = load_board_view_model(copper_json)
     viewer = VedoStackupViewer(model, export_output_dir=defect_output_dir)
-    StackupControlPanel(viewer).run()
+    StackupControlPanel(
+        viewer,
+        initial_package_name=initial_package_name,
+        save_package_callback=lambda package_name, settings_payload, selected_outputs: save_pcb_package_from_viewer(
+            input_pcb=input_pcb,
+            package_name=package_name,
+            settings_payload=settings_payload,
+            selected_outputs=selected_outputs,
+            clearance_mm=clearance_mm,
+            kicad_python=kicad_python,
+            log_level=log_level,
+            source_copper_json=copper_json,
+        ),
+    ).run()
+
+
+def ensure_copper_json(input_pcb: Path, copper_json: Path, kicad_python: str | None, log_level: str) -> None:
+    if copper_json.exists():
+        return
+    run_extract(input_pcb, copper_json, kicad_python, log_level)
 
 
 def run_defect_export(copper_json: Path, output_dir: Path, args: argparse.Namespace) -> Path:
@@ -229,11 +373,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Root launcher for PCB extraction, STL creation, viewing, defect editing, and export."
     )
-    parser.set_defaults(command="full")
+    parser.set_defaults(command="viewer")
     parser.add_argument("--input-pcb", type=Path, default=None, help="Optional path to the source .kicad_pcb board.")
     parser.add_argument("--copper-json", type=Path, default=None, help="Optional override for the extracted copper JSON path.")
     parser.add_argument("--stl-output-dir", type=Path, default=None, help="Optional override for the clean STL output directory.")
     parser.add_argument("--defect-output-dir", type=Path, default=None, help="Optional override for defect STL exports.")
+    parser.add_argument("--pcb-package-name", default=None, help="Optional named PCB package, for example PCB1.")
     parser.add_argument("--clearance-mm", type=float, default=DEFAULT_CLEARANCE_MM, help="Material clearance for STL partition export.")
     parser.add_argument("--kicad-python", default=None, help="Path to KiCad's bundled Python executable.")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Extractor log verbosity.")
@@ -299,33 +444,102 @@ def resolve_input_board(args: argparse.Namespace) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    command = args.command or "viewer"
 
     try:
         input_pcb = resolve_input_board(args)
-        copper_json, stl_output_dir, defect_output_dir = build_output_paths(
+        copper_json, stl_output_dir, defect_output_dir, package_root = build_output_paths(
             input_pcb,
             args.copper_json,
             args.stl_output_dir,
             args.defect_output_dir,
+            args.pcb_package_name,
         )
+        package_name = args.pcb_package_name.strip() if isinstance(args.pcb_package_name, str) else ""
 
-        if args.command == "extract":
+        if command == "extract":
             run_extract(input_pcb, copper_json, args.kicad_python, args.log_level)
+            if package_root is not None:
+                write_pcb_package_manifest(
+                    package_root,
+                    package_name=package_name or slugify_package_name(input_pcb.stem),
+                    input_pcb=input_pcb,
+                    copper_json=copper_json,
+                    stl_output_dir=stl_output_dir,
+                    defect_output_dir=defect_output_dir,
+                )
             return 0
-        if args.command == "stl":
+        if command == "stl":
             run_base_stl_export(copper_json, stl_output_dir, args.clearance_mm)
+            if package_root is not None:
+                write_pcb_package_manifest(
+                    package_root,
+                    package_name=package_name or slugify_package_name(input_pcb.stem),
+                    input_pcb=input_pcb,
+                    copper_json=copper_json,
+                    stl_output_dir=stl_output_dir,
+                    defect_output_dir=defect_output_dir,
+                )
             return 0
-        if args.command == "viewer":
-            run_viewer(copper_json, defect_output_dir)
+        if command == "viewer":
+            ensure_copper_json(input_pcb, copper_json, args.kicad_python, args.log_level)
+            if package_root is not None:
+                write_pcb_package_manifest(
+                    package_root,
+                    package_name=package_name or slugify_package_name(input_pcb.stem),
+                    input_pcb=input_pcb,
+                    copper_json=copper_json,
+                    stl_output_dir=stl_output_dir,
+                    defect_output_dir=defect_output_dir,
+                )
+            run_viewer(
+                copper_json,
+                defect_output_dir,
+                input_pcb=input_pcb,
+                clearance_mm=args.clearance_mm,
+                kicad_python=args.kicad_python,
+                log_level=args.log_level,
+                initial_package_name=package_name,
+            )
             return 0
-        if args.command == "defect-export":
+        if command == "defect-export":
             run_defect_export(copper_json, defect_output_dir, args)
+            if package_root is not None:
+                write_pcb_package_manifest(
+                    package_root,
+                    package_name=package_name or slugify_package_name(input_pcb.stem),
+                    input_pcb=input_pcb,
+                    copper_json=copper_json,
+                    stl_output_dir=stl_output_dir,
+                    defect_output_dir=defect_output_dir,
+                )
             return 0
 
-        run_extract(input_pcb, copper_json, args.kicad_python, args.log_level)
-        run_base_stl_export(copper_json, stl_output_dir, args.clearance_mm)
-        if not getattr(args, "skip_viewer", False):
-            run_viewer(copper_json, defect_output_dir)
+        if command == "full":
+            run_extract(input_pcb, copper_json, args.kicad_python, args.log_level)
+            run_base_stl_export(copper_json, stl_output_dir, args.clearance_mm)
+            if package_root is not None:
+                write_pcb_package_manifest(
+                    package_root,
+                    package_name=package_name or slugify_package_name(input_pcb.stem),
+                    input_pcb=input_pcb,
+                    copper_json=copper_json,
+                    stl_output_dir=stl_output_dir,
+                    defect_output_dir=defect_output_dir,
+                )
+            if not getattr(args, "skip_viewer", False):
+                run_viewer(
+                    copper_json,
+                    defect_output_dir,
+                    input_pcb=input_pcb,
+                    clearance_mm=args.clearance_mm,
+                    kicad_python=args.kicad_python,
+                    log_level=args.log_level,
+                    initial_package_name=package_name,
+                )
+            return 0
+
+        raise PipelineError(f"Unknown command: {command}")
     except PipelineError as exc:
         print(str(exc), file=sys.stderr)
         return 1

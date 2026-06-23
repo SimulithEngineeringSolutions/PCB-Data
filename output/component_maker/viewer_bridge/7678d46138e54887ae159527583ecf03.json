@@ -1,0 +1,11 @@
+{
+  "length_mm": 2.0,
+  "width_mm": 1.25,
+  "height_mm": 0.45,
+  "electrode_wrap_mm": 0.32,
+  "electrode_thickness_mm": 0.04,
+  "show_core": true,
+  "show_electrodes": true,
+  "show_resistive": true,
+  "use_orthographic": false
+}

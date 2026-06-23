@@ -140,6 +140,15 @@ class PartitionManifest:
     meshes: list[MeshRecord]
 
 
+def concatenate_meshes(meshes: list[trimesh.Trimesh]) -> trimesh.Trimesh | None:
+    if not meshes:
+        return None
+    if len(meshes) == 1:
+        mesh = meshes[0]
+        return trimesh.Trimesh(vertices=mesh.vertices.copy(), faces=mesh.faces.copy(), process=False)
+    return trimesh.util.concatenate(meshes)
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Export Monte-Carlo-safe FR4 and copper partition meshes.")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="Path to copper_paths.json.")
@@ -1083,6 +1092,7 @@ def export_material_partition(input_path: Path, output_dir: Path, clearance_mm: 
     trace_meshes: list[trimesh.Trimesh] = []
     layer_mesh_by_name: dict[str, trimesh.Trimesh] = {}
     partition_meshes: list[trimesh.Trimesh] = []
+    dielectric_meshes: list[trimesh.Trimesh] = []
 
     for layer_name in model.active_layers:
         copper_thickness_mm = copper_thickness_for_layer(model, layer_name)
@@ -1220,10 +1230,23 @@ def export_material_partition(input_path: Path, output_dir: Path, clearance_mm: 
         mesh.export(path)
         mesh_records.append(MeshRecord(name=slab_name, path=str(path), triangle_count=len(mesh.faces)))
         scene.add_geometry(mesh, node_name=slab_name)
+        dielectric_meshes.append(mesh)
         partition_meshes.append(mesh)
 
+    dielectric_all_mesh = concatenate_meshes(dielectric_meshes)
+    if dielectric_all_mesh is not None:
+        dielectric_all_path = output_dir / "fr4_all.stl"
+        dielectric_all_mesh.export(dielectric_all_path)
+        mesh_records.append(
+            MeshRecord(
+                name="fr4_all",
+                path=str(dielectric_all_path),
+                triangle_count=len(dielectric_all_mesh.faces),
+            )
+        )
+
     if partition_meshes:
-        pcb_parts_all_mesh = trimesh.util.concatenate(partition_meshes)
+        pcb_parts_all_mesh = concatenate_meshes(partition_meshes)
         pcb_parts_all_path = output_dir / "pcb_parts_all.stl"
         pcb_parts_all_mesh.export(pcb_parts_all_path)
         mesh_records.append(

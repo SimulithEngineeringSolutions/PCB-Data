@@ -1,0 +1,12 @@
+{
+  "package_name": "PCB_Normal",
+  "source_pcb": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\DataSet\\KICAD\\Arduino hat\\Arduino_hat.kicad_pcb",
+  "copper_json": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\copper_paths.json",
+  "clean_export_dir": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition",
+  "defect_export_dir": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition_defects",
+  "variants": {
+    "clean": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition\\material_partition_manifest.json",
+    "defect": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition_defects\\material_partition_manifest.json"
+  },
+  "settings_snapshot": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\pcb_package_settings.json"
+}

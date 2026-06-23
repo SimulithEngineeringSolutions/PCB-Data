@@ -1,0 +1,17 @@
+{
+  "source": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\DataSet\\KICAD\\Arduino hat\\Arduino_hat.kicad_pcb",
+  "export_dir": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition_defects",
+  "defects_enabled": false,
+  "meshes": [
+    {
+      "name": "copper_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition_defects\\copper_all.stl",
+      "triangle_count": 24458
+    },
+    {
+      "name": "fr4_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\pcb_library\\pcb_normal\\material_partition_defects\\fr4_all.stl",
+      "triangle_count": 5952
+    }
+  ]
+}

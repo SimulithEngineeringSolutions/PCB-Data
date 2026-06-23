@@ -4,94 +4,24 @@
   "defects_enabled": false,
   "meshes": [
     {
-      "name": "trace_F.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\trace_F_Cu.stl",
-      "triangle_count": 2696
-    },
-    {
-      "name": "copper_F.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\copper_F_Cu.stl",
-      "triangle_count": 6816
-    },
-    {
-      "name": "trace_In1.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\trace_In1_Cu.stl",
-      "triangle_count": 1488
-    },
-    {
-      "name": "copper_In1.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\copper_In1_Cu.stl",
-      "triangle_count": 3348
-    },
-    {
-      "name": "trace_In2.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\trace_In2_Cu.stl",
-      "triangle_count": 1572
-    },
-    {
-      "name": "copper_In2.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\copper_In2_Cu.stl",
-      "triangle_count": 3484
-    },
-    {
-      "name": "trace_B.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\trace_B_Cu.stl",
-      "triangle_count": 1120
-    },
-    {
-      "name": "copper_B.Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\copper_B_Cu.stl",
-      "triangle_count": 3000
-    },
-    {
-      "name": "via_barrels",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\via_barrels.stl",
-      "triangle_count": 3360
-    },
-    {
-      "name": "pad_barrels",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\pad_barrels.stl",
-      "triangle_count": 12000
-    },
-    {
       "name": "copper_all",
       "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\copper_all.stl",
       "triangle_count": 24458
     },
     {
-      "name": "trace_all",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\trace_all.stl",
-      "triangle_count": 6876
+      "name": "solder_mask_F.Mask",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\solder_mask_F_Mask.stl",
+      "triangle_count": 7204
     },
     {
-      "name": "via_air",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\via_air.stl",
-      "triangle_count": 504
+      "name": "solder_mask_B.Mask",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\solder_mask_B_Mask.stl",
+      "triangle_count": 3268
     },
     {
-      "name": "pad_air",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\pad_air.stl",
-      "triangle_count": 900
-    },
-    {
-      "name": "fr4_F_Cu_to_In1_Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\fr4_F_Cu_to_In1_Cu.stl",
-      "triangle_count": 1984
-    },
-    {
-      "name": "fr4_In1_Cu_to_In2_Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\fr4_In1_Cu_to_In2_Cu.stl",
-      "triangle_count": 1984
-    },
-    {
-      "name": "fr4_In2_Cu_to_B_Cu",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\fr4_In2_Cu_to_B_Cu.stl",
-      "triangle_count": 1984
-    },
-    {
-      "name": "pcb_parts_all",
-      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\pcb_parts_all.stl",
-      "triangle_count": 30410
+      "name": "fr4_all",
+      "path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\arduino_hat\\material_partition_defects\\fr4_all.stl",
+      "triangle_count": 5952
     }
   ]
 }

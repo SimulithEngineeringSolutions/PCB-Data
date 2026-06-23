@@ -1,0 +1,47 @@
+{
+  "component_family": "resistor",
+  "component_name": "generic_resistor",
+  "source_project_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\part_generator\\PCB parts\\SMD resistor.json",
+  "native_bbox_mm": {
+    "x": 10.0,
+    "y": 4.091666666666667,
+    "z": 5.0
+  },
+  "native_center_mm": {
+    "x": 0.0,
+    "y": 0.26249999999999984,
+    "z": 2.5
+  },
+  "parts": [
+    {
+      "part_name": "Ceramic Base",
+      "stl_path": "..\\part_generator\\exports\\ceramic_base.stl",
+      "color": "#c5b8a5",
+      "height_mm": 5.0
+    },
+    {
+      "part_name": "Copper Caps",
+      "stl_path": "..\\part_generator\\exports\\copper_caps.stl",
+      "color": "#ff8040",
+      "height_mm": 5.0
+    },
+    {
+      "part_name": "Resistive Layer",
+      "stl_path": "..\\part_generator\\exports\\resistive_layer.stl",
+      "color": "#000000",
+      "height_mm": 5.0
+    },
+    {
+      "part_name": "Insulating Cover",
+      "stl_path": "..\\part_generator\\exports\\insulating_cover.stl",
+      "color": "#ffffff",
+      "height_mm": 5.0
+    },
+    {
+      "part_name": "Contact Pins",
+      "stl_path": "..\\part_generator\\exports\\contact_pins.stl",
+      "color": "#c0c0c0",
+      "height_mm": 5.0
+    }
+  ]
+}

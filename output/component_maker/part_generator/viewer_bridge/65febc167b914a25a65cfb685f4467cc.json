@@ -1,0 +1,16 @@
+{
+  "parts": [
+    {
+      "name": "Ceramic Core",
+      "color": "#d7cfbd",
+      "height_mm": 0.45
+    },
+    {
+      "name": "Electrode",
+      "color": "#b87333",
+      "height_mm": 0.08
+    }
+  ],
+  "contours": [],
+  "status_message": "Launching viewer..."
+}

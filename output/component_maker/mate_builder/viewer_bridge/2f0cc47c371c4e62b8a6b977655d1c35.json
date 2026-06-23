@@ -1,0 +1,16 @@
+{
+  "moving_part_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\ConnectorPin\\connector Pin.stl",
+  "fixed_part_path": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\ConnectorPin\\Plastic Covering.stl",
+  "moving_pair": null,
+  "fixed_pair": null,
+  "contact_moving_pair": null,
+  "contact_fixed_pair": null,
+  "array": {
+    "count_x": 5,
+    "count_y": 5,
+    "pitch_x_mm": 2.539999899454415,
+    "pitch_y_mm": 2.400000113993883
+  },
+  "status_message": "Viewer launched.",
+  "summary_message": "No full center mate has been picked yet."
+}
