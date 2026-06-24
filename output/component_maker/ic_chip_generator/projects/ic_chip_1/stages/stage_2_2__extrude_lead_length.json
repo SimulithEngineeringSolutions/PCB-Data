@@ -1,0 +1,52 @@
+{
+  "saved_stage_index": 1,
+  "saved_stage_title": "2. Extrude Lead Length",
+  "current_step_index": 12,
+  "current_step_title": "13. Wedge Bond Ending",
+  "status_message": "13. Wedge Bond Ending active.",
+  "lead_profile": {
+    "profile_points_mm": [
+      [
+        -8.0,
+        1.0416666666666667
+      ],
+      [
+        -1.4166666666666667,
+        1.0416666666666667
+      ],
+      [
+        2.25,
+        -1.5833333333333335
+      ],
+      [
+        8.125,
+        -1.5833333333333335
+      ],
+      [
+        8.125,
+        -2.5833333333333335
+      ],
+      [
+        1.5833333333333333,
+        -2.5833333333333335
+      ],
+      [
+        -2.125,
+        0.041666666666666664
+      ],
+      [
+        -8.0,
+        0.041666666666666664
+      ]
+    ],
+    "draft_points_px": [],
+    "distance_target_mm": 1.0,
+    "distance_point_indices": [
+      3,
+      4
+    ]
+  },
+  "lead_extrusion": {
+    "leg_length_mm": 4.0
+  }
+}

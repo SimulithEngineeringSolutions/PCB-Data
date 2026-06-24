@@ -1,0 +1,119 @@
+{
+  "profile_points_mm": [
+    [
+      -8.0,
+      1.0416666666666667
+    ],
+    [
+      -1.4166666666666667,
+      1.0416666666666667
+    ],
+    [
+      2.25,
+      -1.5833333333333335
+    ],
+    [
+      8.125,
+      -1.5833333333333335
+    ],
+    [
+      8.125,
+      -2.5833333333333335
+    ],
+    [
+      1.5833333333333333,
+      -2.5833333333333335
+    ],
+    [
+      -2.125,
+      0.041666666666666664
+    ],
+    [
+      -8.0,
+      0.041666666666666664
+    ]
+  ],
+  "leg_length_mm": 4.0,
+  "body_width_mm": 40.0,
+  "body_depth_mm": 60.0,
+  "body_height_mm": 1.6,
+  "side_settings": [
+    {
+      "name": "Top",
+      "count": 0,
+      "pitch_mm": 15.0,
+      "pitch_axis": "x",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    },
+    {
+      "name": "Bottom",
+      "count": 0,
+      "pitch_mm": 15.0,
+      "pitch_axis": "x",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    },
+    {
+      "name": "Left",
+      "count": 4,
+      "pitch_mm": 15.0,
+      "pitch_axis": "y",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 90.0
+    },
+    {
+      "name": "Right",
+      "count": 4,
+      "pitch_mm": 15.0,
+      "pitch_axis": "y",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 90.0
+    }
+  ],
+  "status_message": "13. Wedge Bond Ending active.",
+  "project_name": "IC chip 1",
+  "project_dir": "C:\\Users\\Admin\\Documents\\Github\\PCB-Data\\output\\component_maker\\ic_chip_generator\\projects\\ic_chip_1",
+  "current_step_index": 12,
+  "current_step_title": "13. Wedge Bond Ending",
+  "draft_points_px": [],
+  "distance_target_mm": 1.0,
+  "lead_offset_mm": -5.0,
+  "die_leadframe_ratio_percent": 80.0,
+  "die_leadframe_clearance_mm": 4.0,
+  "die_leadframe_thickness_mm": 1.0,
+  "silicon_die_width_mm": 15.0,
+  "silicon_die_depth_mm": 15.0,
+  "silicon_die_thickness_mm": 1.0,
+  "leg_pick_distance_mm": 2.0,
+  "leg_pick_marker_size_mm": 2.5,
+  "die_region_span_percent": 70.0,
+  "die_region_depth_mm": 5.0,
+  "die_region_offset_mm": 1.0,
+  "die_pick_region": "Top",
+  "die_pick_section_index": 1,
+  "die_pick_position_percent": 25.0,
+  "die_pick_marker_size_mm": 0.06,
+  "arc_height_mm": 5.0,
+  "arc_xy_noise_mm": 0.0,
+  "wire_arc_point_spacing_mm": 0.2,
+  "ball_bond_diameter_mm": 0.1,
+  "ball_bond_length_mm": 0.2,
+  "ball_bond_revolution_steps": 10,
+  "wire_diameter_mm": 0.1,
+  "wire_rise_z_mm": 0.0,
+  "wire_tube_side_count": 10,
+  "wedge_bond_length_mm": 0.6,
+  "wedge_bond_width_mm": 0.15,
+  "wedge_bond_thickness_mm": 0.01,
+  "wedge_approach_run_mm": 5.0,
+  "distance_pick_active": false,
+  "distance_point_indices": [
+    3,
+    4
+  ]
+}

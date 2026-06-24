@@ -1,0 +1,16 @@
+{
+  "saved_stage_index": 1,
+  "saved_stage_title": "2. Extrude Lead Length",
+  "current_step_index": 0,
+  "current_step_title": "1. Draw Lead Profile",
+  "status_message": "Step 1: draw a closed 2D lead profile.",
+  "lead_profile": {
+    "profile_points_mm": [],
+    "draft_points_px": [],
+    "distance_target_mm": 1.0,
+    "distance_point_indices": []
+  },
+  "lead_extrusion": {
+    "leg_length_mm": 4.0
+  }
+}

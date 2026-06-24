@@ -1,0 +1,45 @@
+{
+  "component_family": "generic",
+  "component_name": "y1_attached_stl",
+  "native_bbox_mm": {
+    "x": 35.999998450279236,
+    "y": 96.00000083446503,
+    "z": 24.59999918937683
+  },
+  "native_center_mm": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 12.299999594688416
+  },
+  "native_rotation_deg": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "parts": [
+    {
+      "part_name": "Electrodes",
+      "stl_path": "C:\\Users\\Admin\\Downloads\\Electrodes.stl",
+      "color": "#6d6875",
+      "height_mm": 24.59999918937683
+    },
+    {
+      "part_name": "Quartz Crystal",
+      "stl_path": "C:\\Users\\Admin\\Downloads\\Quartz Crystal.stl",
+      "color": "#b87333",
+      "height_mm": 24.59999918937683
+    },
+    {
+      "part_name": "Metal Lid",
+      "stl_path": "C:\\Users\\Admin\\Downloads\\Metal Lid.stl",
+      "color": "#4a7a96",
+      "height_mm": 24.59999918937683
+    },
+    {
+      "part_name": "Insulating base",
+      "stl_path": "C:\\Users\\Admin\\Downloads\\Insulating base.stl",
+      "color": "#b87333",
+      "height_mm": 24.59999918937683
+    }
+  ]
+}

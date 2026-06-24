@@ -23,6 +23,7 @@ PLACEMENT_OVERRIDE_PATH = REPO_ROOT / "output" / "component_placement_overrides.
 ASSET_ROTATION_OVERRIDE_PATH = REPO_ROOT / "output" / "component_asset_rotation_overrides.json"
 BOARD_MESH_OVERRIDE_PATH = REPO_ROOT / "output" / "board_mesh_transform_overrides.json"
 COMPONENT_REFERENCE_ASSET_OVERRIDE_PATH = REPO_ROOT / "output" / "component_reference_asset_overrides.json"
+BOUNDING_BOX_ONLY_ASSET_OVERRIDE = "__BOUNDING_BOX_ONLY__"
 VIEWER_BRIDGE_DIR = REPO_ROOT / "output" / "component_viewer_bridge"
 COMPONENT_LIBRARY_DIR = REPO_ROOT / "output" / "component_maker" / "library"
 FEMALE_PIN_1X1_DIR = REPO_ROOT / "output" / "component_maker" / "FemalePinConnector1x1"
@@ -358,6 +359,20 @@ def safe_slug(text: str, fallback: str) -> str:
     return slug or fallback
 
 
+def color_for_name(name: str) -> str:
+    palette = [
+        "#202020",
+        "#b87333",
+        "#6d6875",
+        "#537d5d",
+        "#4a7a96",
+        "#b17a3e",
+        "#c14953",
+        "#7d8a91",
+    ]
+    return palette[sum(ord(char) for char in name) % len(palette)]
+
+
 def build_female_pin_array_meshes(
     count_x: int,
     count_y: int,
@@ -470,6 +485,124 @@ def fit_female_pin_array_to_component(
     return result
 
 
+class ViewerEntityBrowser:
+    def __init__(self, board_name: str, on_toggle: callable) -> None:
+        self.root = tk.Tk()
+        self.root.title(f"{board_name} Displayed Entities")
+        self.root.geometry("360x620")
+        self.root.minsize(280, 320)
+        self.closed = False
+        self.on_toggle = on_toggle
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+        frame = ttk.Frame(self.root, padding=10)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Displayed Entities", font=("Georgia", 14, "bold")).grid(row=0, column=0, sticky="w")
+        self.canvas = tk.Canvas(frame, highlightthickness=0)
+        self.canvas.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.canvas.yview)
+        scrollbar.grid(row=1, column=1, sticky="ns", pady=(10, 0))
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.content = ttk.Frame(self.canvas, padding=2)
+        self.content_window = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
+        self.content.bind("<Configure>", self._on_content_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.vars: dict[str, tk.BooleanVar] = {}
+        self.parent_by_key: dict[str, str | None] = {}
+        self.children_by_parent: dict[str, list[str]] = {}
+        self.widgets_by_key: dict[str, ttk.Checkbutton] = {}
+
+    def set_entities(
+        self,
+        entities: list[tuple[str, str, list[tuple[str, str]]]],
+        visibility: dict[str, bool],
+    ) -> None:
+        if self.closed:
+            return
+        for child in self.content.winfo_children():
+            child.destroy()
+        self.parent_by_key.clear()
+        self.children_by_parent.clear()
+        self.widgets_by_key.clear()
+        row = 0
+        for parent_key, parent_label, child_items in entities:
+            parent_var = self.vars.setdefault(parent_key, tk.BooleanVar(value=visibility.get(parent_key, True)))
+            parent_var.set(bool(visibility.get(parent_key, True)))
+            parent_button = ttk.Checkbutton(
+                self.content,
+                text=parent_label,
+                variable=parent_var,
+                command=lambda key=parent_key: self._on_parent_toggle(key),
+            )
+            parent_button.grid(row=row, column=0, sticky="w", pady=(2, 0))
+            self.widgets_by_key[parent_key] = parent_button
+            self.parent_by_key[parent_key] = None
+            self.children_by_parent[parent_key] = []
+            row += 1
+            for child_key, child_label in child_items:
+                child_var = self.vars.setdefault(child_key, tk.BooleanVar(value=visibility.get(child_key, True)))
+                child_var.set(bool(visibility.get(child_key, True)))
+                child_button = ttk.Checkbutton(
+                    self.content,
+                    text=child_label,
+                    variable=child_var,
+                    command=lambda key=child_key: self._on_child_toggle(key),
+                )
+                child_button.grid(row=row, column=0, sticky="w", padx=(24, 0), pady=(2, 0))
+                self.widgets_by_key[child_key] = child_button
+                self.parent_by_key[child_key] = parent_key
+                self.children_by_parent[parent_key].append(child_key)
+                row += 1
+            self._sync_child_widget_states(parent_key)
+
+    def _sync_child_widget_states(self, parent_key: str) -> None:
+        parent_enabled = bool(self.vars.get(parent_key).get()) if parent_key in self.vars else True
+        for child_key in self.children_by_parent.get(parent_key, []):
+            widget = self.widgets_by_key.get(child_key)
+            if widget is None:
+                continue
+            if parent_enabled:
+                widget.state(["!disabled"])
+            else:
+                widget.state(["disabled"])
+
+    def _on_parent_toggle(self, parent_key: str) -> None:
+        is_visible = bool(self.vars[parent_key].get())
+        self._sync_child_widget_states(parent_key)
+        self.on_toggle(parent_key, is_visible)
+
+    def _on_child_toggle(self, child_key: str) -> None:
+        is_visible = bool(self.vars[child_key].get())
+        self.on_toggle(child_key, is_visible)
+
+    def _on_content_configure(self, _event) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event) -> None:
+        self.canvas.itemconfigure(self.content_window, width=event.width)
+
+    def pump(self) -> None:
+        if self.closed:
+            return
+        try:
+            self.root.update_idletasks()
+            self.root.update()
+        except tk.TclError:
+            self.closed = True
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+
 class Component3DViewer:
     def __init__(
         self,
@@ -503,6 +636,12 @@ class Component3DViewer:
         self._last_component_asset_override_signature = ""
         self._last_click_reference: str | None = None
         self._last_click_time = 0.0
+        self.entity_browser: ViewerEntityBrowser | None = None
+        self.entity_tree_payload: list[tuple[str, str, list[tuple[str, str]]]] = []
+        self.entity_visibility: dict[str, bool] = {}
+        self.entity_parent_by_key: dict[str, str | None] = {}
+        self.entity_actor_groups: dict[str, list[object]] = {}
+        self.asset_definition_cache: dict[str, ComponentAssetDefinition] = {}
 
     def _component_color(self, component: ComponentRecord) -> str:
         footprint = component.footprint.upper()
@@ -522,7 +661,51 @@ class Component3DViewer:
             points = outline_segment_points(segment)
             coords = [(x, y, 0.0) for x, y in points]
             actors.append(Line(coords).c("#2d241f").lw(3))
+        self._register_entity_group("pcb::outline", actors, "pcb")
         return actors
+
+    def _component_display_name(self, component: ComponentRecord) -> str:
+        value_text = component.value.strip() if component.value.strip() else component.footprint
+        return f"{component.reference} {value_text}"
+
+    def _register_entity_group(self, key: str, actors: list[object], parent_key: str | None = None) -> None:
+        self.entity_parent_by_key[key] = parent_key
+        self.entity_actor_groups[key] = actors
+        self.entity_visibility.setdefault(key, True)
+
+    def _entity_effective_visible(self, key: str) -> bool:
+        current_key: str | None = key
+        while current_key is not None:
+            if not self.entity_visibility.get(current_key, True):
+                return False
+            current_key = self.entity_parent_by_key.get(current_key)
+        return True
+
+    def _set_actor_visible(self, actor: object, visible: bool) -> None:
+        try:
+            if visible:
+                actor.on()
+            else:
+                actor.off()
+            return
+        except Exception:
+            pass
+        try:
+            actor.SetVisibility(1 if visible else 0)
+        except Exception:
+            pass
+
+    def _apply_entity_visibility(self) -> None:
+        for key, actors in self.entity_actor_groups.items():
+            is_visible = self._entity_effective_visible(key)
+            for actor in actors:
+                self._set_actor_visible(actor, is_visible)
+
+    def _on_entity_visibility_changed(self, key: str, is_visible: bool) -> None:
+        self.entity_visibility[key] = is_visible
+        self._apply_entity_visibility()
+        if self.is_shown:
+            self.plotter.render()
 
     def _board_mesh_color(self, mesh_name: str) -> str:
         name = mesh_name.lower()
@@ -563,9 +746,15 @@ class Component3DViewer:
         return (target_min_x - min_x, target_min_y - min_y)
 
     def _build_board_mesh_actors(self) -> list:
+        self.entity_parent_by_key.clear()
+        self.entity_actor_groups.clear()
+        self.entity_visibility.setdefault("pcb", True)
         if self.board_mesh_package is None:
+            self.entity_visibility.setdefault("pcb::outline", True)
+            self.entity_tree_payload = [("pcb", "PCB", [("pcb::outline", "Outline")])]
             return []
         actors: list = []
+        pcb_children: list[tuple[str, str]] = []
         offset_x, offset_y = self._board_mesh_alignment_offset_xy()
         transform_override = self._board_mesh_transform_override()
         rotation_deg_xyz = (
@@ -613,6 +802,12 @@ class Component3DViewer:
             actor = Mesh([shifted_vertices, faces]).c(self._board_mesh_color(mesh_name)).alpha(1.0)
             actor.linewidth(0)
             actors.append(actor)
+            child_key = f"pcb::{mesh_name}"
+            self._register_entity_group(child_key, [actor], "pcb")
+            pcb_children.append((child_key, mesh_name))
+        self.entity_visibility.setdefault("pcb::outline", True)
+        pcb_children.append(("pcb::outline", "Outline"))
+        self.entity_tree_payload = [("pcb", "PCB", pcb_children)]
         return actors
 
     def _build_component_actors(self) -> list:
@@ -620,14 +815,34 @@ class Component3DViewer:
         self.component_actor_by_reference.clear()
         self.reference_by_actor_id.clear()
         self.actor_base_color.clear()
+        entity_payload = list(self.entity_tree_payload)
         for component in self.scene.components:
+            parent_key = f"component::{component.reference}"
+            self.entity_visibility.setdefault(parent_key, True)
             component_actors = self._build_component_asset_actors(component)
+            component_children: list[tuple[str, str]] = []
             if not component_actors:
                 component_actors = self._build_component_box_actors(component)
+                component_children.append((f"{parent_key}::body", "Body"))
+            else:
+                asset = self._asset_override_for_component(component)
+                if asset is None:
+                    family = infer_component_family(component)
+                    asset_options = self.asset_library.get(family, [])
+                    asset = asset_options[0] if asset_options else None
+                if asset is not None:
+                    component_children.extend(
+                        (f"{parent_key}::{part.part_name}", part.part_name)
+                        for part in asset.parts
+                    )
             actors.extend(component_actors)
             self.component_actor_by_reference[component.reference] = component_actors
             for actor in component_actors:
                 self.reference_by_actor_id[id(actor)] = component.reference
+            entity_payload.append(
+                (parent_key, self._component_display_name(component), component_children or [(f"{parent_key}::body", "Body")])
+            )
+        self.entity_tree_payload = entity_payload
         return actors
 
     def _rotation_override_signature(self) -> str:
@@ -662,6 +877,10 @@ class Component3DViewer:
     def _component_asset_override_signature(self) -> str:
         board_overrides = load_component_reference_asset_overrides().get(board_override_key(self.scene.board_path), {})
         return json.dumps(board_overrides, sort_keys=True)
+
+    def _component_forces_bounding_box(self, component: ComponentRecord) -> bool:
+        board_overrides = load_component_reference_asset_overrides().get(board_override_key(self.scene.board_path), {})
+        return board_overrides.get(component.reference, "").strip() == BOUNDING_BOX_ONLY_ASSET_OVERRIDE
 
     def _transform_board_mesh_vertex(
         self,
@@ -714,6 +933,9 @@ class Component3DViewer:
         self.actors = self._build_board_mesh_actors() + self._build_outline_actors() + self._build_component_actors()
         for actor in self.actors:
             self.plotter += actor
+        if self.entity_browser is not None:
+            self.entity_browser.set_entities(self.entity_tree_payload, self.entity_visibility)
+        self._apply_entity_visibility()
         self.set_selected_reference(self.selected_reference)
         if self.is_shown:
             self.plotter.render()
@@ -733,6 +955,7 @@ class Component3DViewer:
         if abs(component.rotation_deg) > 1e-6:
             actor.rotate_z(kicad_rotation_to_math(component.rotation_deg), around=(center_x, center_y, -height / 2.0))
         self.actor_base_color[id(actor)] = self._component_color(component)
+        self._register_entity_group(f"component::{component.reference}::body", [actor], f"component::{component.reference}")
         return [actor]
 
     def _load_asset_mesh(self, stl_path: Path) -> trimesh.Trimesh:
@@ -787,12 +1010,18 @@ class Component3DViewer:
     def _asset_override_for_component(self, component: ComponentRecord) -> ComponentAssetDefinition | None:
         board_overrides = load_component_reference_asset_overrides().get(board_override_key(self.scene.board_path), {})
         definition_path_text = board_overrides.get(component.reference, "").strip()
+        if definition_path_text == BOUNDING_BOX_ONLY_ASSET_OVERRIDE:
+            return None
         if not definition_path_text:
             return None
         definition_path = Path(definition_path_text).expanduser().resolve()
+        cached = self.asset_definition_cache.get(str(definition_path))
+        if cached is not None:
+            return cached
         for asset_list in self.asset_library.values():
             for asset in asset_list:
                 if asset.definition_path == definition_path:
+                    self.asset_definition_cache[str(definition_path)] = asset
                     return asset
         try:
             payload = json.loads(definition_path.read_text(encoding="utf-8"))
@@ -853,10 +1082,12 @@ class Component3DViewer:
             ),
             parts=parts,
         )
-        self.asset_library.setdefault(component_family, []).insert(0, asset)
+        self.asset_definition_cache[str(definition_path)] = asset
         return asset
 
     def _build_component_asset_actors(self, component: ComponentRecord) -> list:
+        if self._component_forces_bounding_box(component):
+            return []
         asset = self._asset_override_for_component(component)
         if asset is None:
             family = infer_component_family(component)
@@ -911,6 +1142,11 @@ class Component3DViewer:
             actor.linewidth(0)
             self.actor_base_color[id(actor)] = part.color
             actors.append(actor)
+            self._register_entity_group(
+                f"component::{component.reference}::{part.part_name}",
+                [actor],
+                f"component::{component.reference}",
+            )
         return actors
 
     def _on_left_click(self, event) -> None:
@@ -924,7 +1160,7 @@ class Component3DViewer:
         self.set_selected_reference(reference)
         self._write_bridge_selection(reference)
         if reference == self._last_click_reference and (now - self._last_click_time) <= 0.7:
-            self._prompt_rotation_override_for_reference(reference)
+            self._write_bridge_rotation_request(reference)
             self._last_click_reference = None
             self._last_click_time = 0.0
             return
@@ -940,104 +1176,17 @@ class Component3DViewer:
             return
         self.set_selected_reference(reference)
         self._write_bridge_selection(reference)
-        self._prompt_rotation_override_for_reference(reference)
+        self._write_bridge_rotation_request(reference)
         self._last_click_reference = None
         self._last_click_time = 0.0
 
-    def _prompt_rotation_override_for_reference(self, reference: str) -> None:
-        board_key = board_override_key(self.scene.board_path)
-        current_values = load_asset_rotation_overrides().get(board_key, {}).get(reference, {})
-        dialog_root = tk.Tk()
-        dialog_root.withdraw()
-        try:
-            response = self._ask_xyz_rotation(
-                parent=dialog_root,
-                title="Rotate Part",
-                reference=reference,
-                initial_xyz=(
-                    float(current_values.get("x_deg", 0.0)),
-                    float(current_values.get("y_deg", 0.0)),
-                    float(current_values.get("z_deg", 0.0)),
-                ),
-            )
-        finally:
-            dialog_root.destroy()
-        if response is None:
+    def _write_bridge_rotation_request(self, reference: str) -> None:
+        if self.bridge_path is None:
             return
-        x_deg, y_deg, z_deg = response
-        overrides = load_asset_rotation_overrides()
-        board_overrides = overrides.setdefault(board_key, {})
-        board_overrides[reference] = {
-            "x_deg": float(x_deg),
-            "y_deg": float(y_deg),
-            "z_deg": float(z_deg),
-        }
-        save_asset_rotation_overrides(overrides)
-        self._last_rotation_override_signature = self._rotation_override_signature()
-        self._refresh_scene_actors()
-
-    def _ask_xyz_rotation(
-        self,
-        *,
-        parent: tk.Misc,
-        title: str,
-        reference: str,
-        initial_xyz: tuple[float, float, float],
-    ) -> tuple[float, float, float] | None:
-        result: dict[str, tuple[float, float, float] | None] = {"value": None}
-        dialog = tk.Toplevel(parent)
-        dialog.title(title)
-        dialog.resizable(False, False)
-        dialog.transient(parent)
-        dialog.attributes("-topmost", True)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: dialog.destroy())
-
-        frame = ttk.Frame(dialog, padding=12)
-        frame.pack(fill="both", expand=True)
-        frame.columnconfigure(1, weight=1)
-
-        ttk.Label(frame, text=f"Set X / Y / Z rotation for {reference}.", wraplength=300).grid(
-            row=0, column=0, columnspan=2, sticky="w"
-        )
-
-        x_var = tk.StringVar(value=f"{initial_xyz[0]:.1f}" if abs(initial_xyz[0]) > 1e-9 else "0")
-        y_var = tk.StringVar(value=f"{initial_xyz[1]:.1f}" if abs(initial_xyz[1]) > 1e-9 else "0")
-        z_var = tk.StringVar(value=f"{initial_xyz[2]:.1f}" if abs(initial_xyz[2]) > 1e-9 else "0")
-
-        ttk.Label(frame, text="X (deg)").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        x_entry = ttk.Entry(frame, textvariable=x_var, width=12)
-        x_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(10, 0))
-
-        ttk.Label(frame, text="Y (deg)").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(frame, textvariable=y_var, width=12).grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=(8, 0))
-
-        ttk.Label(frame, text="Z (deg)").grid(row=3, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(frame, textvariable=z_var, width=12).grid(row=3, column=1, sticky="ew", padx=(10, 0), pady=(8, 0))
-
-        button_row = ttk.Frame(frame)
-        button_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
-        button_row.columnconfigure(0, weight=1)
-        button_row.columnconfigure(1, weight=1)
-
-        def submit() -> None:
-            try:
-                result["value"] = (float(x_var.get() or "0"), float(y_var.get() or "0"), float(z_var.get() or "0"))
-            except ValueError:
-                messagebox.showerror("Invalid Rotation", "Enter valid numeric X, Y, and Z rotation values.", parent=dialog)
-                return
-            dialog.destroy()
-
-        def cancel() -> None:
-            dialog.destroy()
-
-        ttk.Button(button_row, text="OK", command=submit).grid(row=0, column=0, sticky="ew")
-        ttk.Button(button_row, text="Cancel", command=cancel).grid(row=0, column=1, sticky="ew", padx=(8, 0))
-
-        dialog.bind("<Return>", lambda _event: submit())
-        dialog.bind("<Escape>", lambda _event: cancel())
-        x_entry.focus_set()
-        dialog.wait_window()
-        return result["value"]
+        payload = self._read_bridge_payload()
+        payload["rotation_request_from_viewer"] = reference
+        self.bridge_path.parent.mkdir(parents=True, exist_ok=True)
+        self.bridge_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def set_selected_reference(self, reference: str | None) -> None:
         self.selected_reference = reference
@@ -1078,6 +1227,8 @@ class Component3DViewer:
         self.bridge_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def _on_timer(self, _event) -> None:
+        if self.entity_browser is not None:
+            self.entity_browser.pump()
         payload = self._read_bridge_payload()
         selected_reference = payload.get("selected_reference_from_catalog")
         if selected_reference != self._last_bridge_selected:
@@ -1098,6 +1249,8 @@ class Component3DViewer:
 
     def show(self) -> None:
         self.actors = self._build_board_mesh_actors() + self._build_outline_actors() + self._build_component_actors()
+        self.entity_browser = ViewerEntityBrowser(self.scene.board_path.stem, self._on_entity_visibility_changed)
+        self.entity_browser.set_entities(self.entity_tree_payload, self.entity_visibility)
         self.plotter.show(*self.actors, self.info, zoom="tight", interactive=False)
         self.is_shown = True
         self._last_rotation_override_signature = self._rotation_override_signature()
@@ -1107,10 +1260,14 @@ class Component3DViewer:
         self.plotter.add_callback("LeftButtonDoubleClick", self._on_left_double_click)
         self.plotter.add_callback("Timer", self._on_timer)
         self.plotter.timer_callback("create", dt=150)
+        self._apply_entity_visibility()
         self.set_selected_reference(self.selected_reference)
         self.plotter.interactive()
 
     def close(self) -> None:
+        if self.entity_browser is not None:
+            self.entity_browser.close()
+            self.entity_browser = None
         if self.is_shown:
             self.plotter.close()
             self.is_shown = False
@@ -1906,6 +2063,7 @@ class ComponentCatalogApp:
         self.viewer_bridge_path: Path | None = None
         self.viewer_process: subprocess.Popen | None = None
         self._last_viewer_selected_reference: str | None = None
+        self._last_viewer_rotation_request: str | None = None
         self.board_mesh_package: BoardMeshPackage | None = auto_detect_board_mesh_package(self.board_path)
 
         self.board_var = tk.StringVar(value=str(self.board_path))
@@ -2142,6 +2300,21 @@ class ComponentCatalogApp:
         ttk.Button(rotate_button_row, text="Z +90", command=lambda: self._nudge_asset_rotation("z_deg", 90.0)).pack(side="left", fill="x", expand=True, padx=(6, 0))
         ttk.Button(rotation_box, text="Save Rotation", command=self._save_asset_rotation_override).grid(row=2, column=0, sticky="ew", pady=(8, 0))
         ttk.Button(rotation_box, text="Clear Rotation", command=self._clear_asset_rotation_override).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(8, 0))
+        row += 1
+
+        attach_stl_box = ttk.LabelFrame(detail_box, text="Attach STL", padding=8)
+        attach_stl_box.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        attach_stl_box.columnconfigure(0, weight=1)
+        ttk.Label(
+            attach_stl_box,
+            text="Load one or more STL files that are already positioned relative to each other, then fit their combined bbox to the selected component.",
+            wraplength=360,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
+        attach_button_row = ttk.Frame(attach_stl_box)
+        attach_button_row.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        attach_button_row.columnconfigure(0, weight=1)
+        ttk.Button(attach_button_row, text="Attach STL", command=self._attach_stl_to_component).grid(row=0, column=0, sticky="ew")
         row += 1
 
         female_pin_box = ttk.LabelFrame(detail_box, text="Female Pin Generator", padding=8)
@@ -2424,6 +2597,19 @@ class ComponentCatalogApp:
         self.status_var.set(f"Saved 3D rotation override for {component.reference}.")
         self._show_selected_component()
 
+    def _save_asset_rotation_override_for_reference(self, reference: str, x_deg: float, y_deg: float, z_deg: float) -> None:
+        overrides = load_asset_rotation_overrides()
+        board_key = board_override_key(self.board_path)
+        board_overrides = overrides.setdefault(board_key, {})
+        board_overrides[reference] = {
+            "x_deg": float(x_deg),
+            "y_deg": float(y_deg),
+            "z_deg": float(z_deg),
+        }
+        save_asset_rotation_overrides(overrides)
+        self.status_var.set(f"Saved 3D rotation override for {reference}.")
+        self._show_selected_component()
+
     def _clear_asset_rotation_override(self) -> None:
         component = self._selected_component()
         if component is None:
@@ -2457,6 +2643,95 @@ class ComponentCatalogApp:
         current_value = float(target_var.get() or "0")
         target_var.set(f"{current_value + delta_deg:.1f}")
         self._save_asset_rotation_override()
+
+    def _ask_xyz_rotation(
+        self,
+        *,
+        parent: tk.Misc,
+        title: str,
+        reference: str,
+        initial_xyz: tuple[float, float, float],
+    ) -> tuple[float, float, float] | str | None:
+        result: dict[str, tuple[float, float, float] | str | None] = {"value": None}
+        dialog = tk.Toplevel(parent)
+        dialog.title(title)
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.attributes("-topmost", True)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: dialog.destroy())
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text=f"Set X / Y / Z rotation for {reference}.", wraplength=300).grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+
+        x_var = tk.StringVar(value=f"{initial_xyz[0]:.1f}" if abs(initial_xyz[0]) > 1e-9 else "0")
+        y_var = tk.StringVar(value=f"{initial_xyz[1]:.1f}" if abs(initial_xyz[1]) > 1e-9 else "0")
+        z_var = tk.StringVar(value=f"{initial_xyz[2]:.1f}" if abs(initial_xyz[2]) > 1e-9 else "0")
+
+        ttk.Label(frame, text="X (deg)").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        x_entry = ttk.Entry(frame, textvariable=x_var, width=12)
+        x_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(10, 0))
+
+        ttk.Label(frame, text="Y (deg)").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frame, textvariable=y_var, width=12).grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=(8, 0))
+
+        ttk.Label(frame, text="Z (deg)").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frame, textvariable=z_var, width=12).grid(row=3, column=1, sticky="ew", padx=(10, 0), pady=(8, 0))
+
+        button_row = ttk.Frame(frame)
+        button_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        button_row.columnconfigure(0, weight=1)
+        button_row.columnconfigure(1, weight=1)
+        button_row.columnconfigure(2, weight=1)
+
+        def submit() -> None:
+            try:
+                result["value"] = (float(x_var.get() or "0"), float(y_var.get() or "0"), float(z_var.get() or "0"))
+            except ValueError:
+                messagebox.showerror("Invalid Rotation", "Enter valid numeric X, Y, and Z rotation values.", parent=dialog)
+                return
+            dialog.destroy()
+
+        def cancel() -> None:
+            dialog.destroy()
+
+        def clear_attached_stl() -> None:
+            result["value"] = "clear_attached_stl"
+            dialog.destroy()
+
+        ttk.Button(button_row, text="OK", command=submit).grid(row=0, column=0, sticky="ew")
+        ttk.Button(button_row, text="Cancel", command=cancel).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Button(button_row, text="Clear Attached STL", command=clear_attached_stl).grid(row=0, column=2, sticky="ew", padx=(8, 0))
+
+        dialog.bind("<Return>", lambda _event: submit())
+        dialog.bind("<Escape>", lambda _event: cancel())
+        x_entry.focus_set()
+        dialog.wait_window()
+        return result["value"]
+
+    def _handle_viewer_rotation_request(self, reference: str) -> None:
+        self._reselect_reference(reference)
+        current_values = load_asset_rotation_overrides().get(board_override_key(self.board_path), {}).get(reference, {})
+        response = self._ask_xyz_rotation(
+            parent=self.root,
+            title="Rotate Part",
+            reference=reference,
+            initial_xyz=(
+                float(current_values.get("x_deg", 0.0)),
+                float(current_values.get("y_deg", 0.0)),
+                float(current_values.get("z_deg", 0.0)),
+            ),
+        )
+        if response == "clear_attached_stl":
+            self._clear_attached_stl_for_reference(reference)
+            return
+        if response is None:
+            return
+        self._save_asset_rotation_override_for_reference(reference, *response)
 
     def _save_board_mesh_transform_override(self) -> None:
         try:
@@ -2584,11 +2859,7 @@ class ComponentCatalogApp:
                 parent=self.root,
             )
             return
-        overrides = load_component_reference_asset_overrides()
-        board_key = board_override_key(self.board_path)
-        board_overrides = overrides.setdefault(board_key, {})
-        board_overrides[component.reference] = str(self.pending_female_pin_definition_path.resolve())
-        save_component_reference_asset_overrides(overrides)
+        self._assign_definition_to_reference(component.reference, self.pending_female_pin_definition_path)
         self.status_var.set(f"Placed generated female pin array on {component.reference}.")
 
     def _write_female_pin_definition(
@@ -2637,6 +2908,87 @@ class ComponentCatalogApp:
         definition_path.parent.mkdir(parents=True, exist_ok=True)
         definition_path.write_text(json.dumps(definition_payload, indent=2), encoding="utf-8")
         return definition_path
+
+    def _write_attached_stl_definition(self, component: ComponentRecord, stl_paths: list[Path]) -> Path:
+        meshes = [load_mesh_mm(path) for path in stl_paths]
+        if not meshes:
+            raise ValueError("No STL meshes were loaded.")
+        combined_bounds = concatenate_meshes(meshes).bounds
+        center_x = float((combined_bounds[0][0] + combined_bounds[1][0]) / 2.0)
+        center_y = float((combined_bounds[0][1] + combined_bounds[1][1]) / 2.0)
+        center_z = float((combined_bounds[0][2] + combined_bounds[1][2]) / 2.0)
+        bbox_x = float(combined_bounds[1][0] - combined_bounds[0][0])
+        bbox_y = float(combined_bounds[1][1] - combined_bounds[0][1])
+        bbox_z = float(combined_bounds[1][2] - combined_bounds[0][2])
+        component_family = "generic"
+        component_name = safe_slug(f"{component.reference}_attached_stl", "attached_stl")
+        definition_path = COMPONENT_LIBRARY_DIR / f"{component_family}__{component_name}.json"
+        definition_payload = {
+            "component_family": component_family,
+            "component_name": component_name,
+            "native_bbox_mm": {"x": bbox_x, "y": bbox_y, "z": bbox_z},
+            "native_center_mm": {"x": center_x, "y": center_y, "z": center_z},
+            "native_rotation_deg": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "parts": [
+                {
+                    "part_name": path.stem,
+                    "stl_path": str(path.resolve()),
+                    "color": color_for_name(path.stem),
+                    "height_mm": bbox_z,
+                }
+                for path in stl_paths
+            ],
+        }
+        definition_path.parent.mkdir(parents=True, exist_ok=True)
+        definition_path.write_text(json.dumps(definition_payload, indent=2), encoding="utf-8")
+        return definition_path
+
+    def _assign_definition_to_reference(self, reference: str, definition_path: Path) -> None:
+        overrides = load_component_reference_asset_overrides()
+        board_key = board_override_key(self.board_path)
+        board_overrides = overrides.setdefault(board_key, {})
+        board_overrides[reference] = str(definition_path.resolve())
+        save_component_reference_asset_overrides(overrides)
+
+    def _attach_stl_to_component(self) -> None:
+        component = self._selected_component()
+        if component is None:
+            messagebox.showinfo("No Selection", "Select a component first.", parent=self.root)
+            return
+        selected_paths = filedialog.askopenfilenames(
+            parent=self.root,
+            title="Choose STL files to attach",
+            initialdir=str(REPO_ROOT / "output"),
+            filetypes=[("STL files", "*.stl"), ("All files", "*.*")],
+        )
+        if not selected_paths:
+            return
+        try:
+            stl_paths = [Path(path).expanduser().resolve() for path in selected_paths]
+            definition_path = self._write_attached_stl_definition(component, stl_paths)
+            self._assign_definition_to_reference(component.reference, definition_path)
+            self.status_var.set(f"Attached {len(stl_paths)} STL file(s) to {component.reference}.")
+            self._show_selected_component()
+        except Exception as exc:
+            messagebox.showerror("Attach STL Failed", str(exc), parent=self.root)
+
+    def _clear_attached_stl_for_reference(self, reference: str) -> bool:
+        overrides = load_component_reference_asset_overrides()
+        board_key = board_override_key(self.board_path)
+        board_overrides = overrides.setdefault(board_key, {})
+        board_overrides[reference] = BOUNDING_BOX_ONLY_ASSET_OVERRIDE
+        save_component_reference_asset_overrides(overrides)
+        self.asset_definition_cache.clear()
+        self.status_var.set(f"{reference} now uses its own bounding box instead of an attached/shared STL.")
+        self._show_selected_component()
+        return True
+
+    def _clear_attached_stl_for_component(self) -> None:
+        component = self._selected_component()
+        if component is None:
+            messagebox.showinfo("No Selection", "Select a component first.", parent=self.root)
+            return
+        self._clear_attached_stl_for_reference(component.reference)
 
     def _reselect_reference(self, reference: str) -> None:
         for index, component in enumerate(self.filtered_components):
@@ -2855,6 +3207,7 @@ class ComponentCatalogApp:
             if self.viewer_bridge_path is not None and self.viewer_bridge_path.exists():
                 payload = json.loads(self.viewer_bridge_path.read_text(encoding="utf-8"))
                 selected_reference = payload.get("selected_reference_from_viewer")
+                rotation_request = payload.get("rotation_request_from_viewer")
                 if (
                     isinstance(selected_reference, str)
                     and selected_reference
@@ -2862,6 +3215,15 @@ class ComponentCatalogApp:
                 ):
                     self._last_viewer_selected_reference = selected_reference
                     self._reselect_reference(selected_reference)
+                if (
+                    isinstance(rotation_request, str)
+                    and rotation_request
+                    and rotation_request != self._last_viewer_rotation_request
+                ):
+                    self._last_viewer_rotation_request = rotation_request
+                    payload["rotation_request_from_viewer"] = None
+                    self.viewer_bridge_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                    self._handle_viewer_rotation_request(rotation_request)
         except Exception:
             pass
         self.root.after(150, self._poll_viewer_bridge)
