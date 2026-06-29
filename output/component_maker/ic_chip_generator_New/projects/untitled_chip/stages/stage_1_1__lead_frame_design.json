@@ -1,0 +1,201 @@
+{
+  "saved_stage_index": 0,
+  "saved_stage_title": "1. Lead Frame Design",
+  "current_step_index": 0,
+  "current_step_title": "1. Lead Frame Design",
+  "status_message": "Set the leadframe size and side counts, then click a guide midpoint to start drawing.",
+  "lead_frame_design": {
+    "project_name": "untitled_chip",
+    "project_dir": "C:\\Users\\Ryant\\Documents\\GitHub\\PCB Data\\output\\component_maker\\ic_chip_generator_New\\projects\\untitled_chip",
+    "current_step_index": 0,
+    "current_step_title": "1. Lead Frame Design",
+    "status_message": "Set the leadframe size and side counts, then click a guide midpoint to start drawing.",
+    "outline_x_mm": 10.0,
+    "outline_y_mm": 10.0,
+    "thickness_z_mm": 0.2,
+    "leadframe_path_width_mm": 0.8,
+    "pins_per_side": {
+      "top": 3,
+      "bottom": 3,
+      "left": 0,
+      "right": 0
+    },
+    "leg_spacing_mm": {
+      "top": 2.0,
+      "bottom": 2.0,
+      "left": 2.0,
+      "right": 2.0
+    },
+    "edge_margin_mm": {
+      "top": 3.0,
+      "bottom": 3.0,
+      "left": 5.0,
+      "right": 5.0
+    },
+    "die_compartment_square_size_mm": 3.0,
+    "die_compartment_center_mm": [
+      0.0,
+      0.0
+    ],
+    "end_region_offset_x_mm": 0.0,
+    "end_region_offset_y_mm": -2.0,
+    "end_region_size_mm": 0.8,
+    "end_region_center_mm": [
+      0.0,
+      -2.0
+    ],
+    "outer_model_scale_percent": 0.1,
+    "encapsulation_width_mm": 7.0,
+    "encapsulation_length_mm": 7.0,
+    "encapsulation_negative_extrusion_mm": 0.0,
+    "encapsulation_positive_extrusion_mm": 0.6,
+    "step5_viewer_visibility": {
+      "lead_frame_paths": true,
+      "centered_die_compartment": false,
+      "silicon_die": true,
+      "bond_assemblies": true,
+      "scaled_outer_model": true,
+      "encapsulation": true
+    },
+    "silicon_die_width_mm": 2.4,
+    "silicon_die_height_mm": 2.4,
+    "silicon_die_thickness_mm": 0.15,
+    "bond_end_region_size_mm": 0.2,
+    "bond_end_region_offset_mm": 0.0,
+    "bond_start_region_size_mm": 0.2,
+    "bond_start_region_gap_mm": 0.15,
+    "bond_start_region_offset_mm": 0.08,
+    "bond_start_region_counts": {
+      "top": 2,
+      "bottom": 2,
+      "left": 2,
+      "right": 2
+    },
+    "guide_slots": [
+      {
+        "side": "TOP",
+        "index": 1,
+        "center_mm": [
+          -2.0,
+          5.0
+        ],
+        "start_mm": [
+          -2.4,
+          5.0
+        ],
+        "end_mm": [
+          -1.6,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 2,
+        "center_mm": [
+          0.0,
+          5.0
+        ],
+        "start_mm": [
+          -0.4,
+          5.0
+        ],
+        "end_mm": [
+          0.4,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 3,
+        "center_mm": [
+          2.0,
+          5.0
+        ],
+        "start_mm": [
+          1.6,
+          5.0
+        ],
+        "end_mm": [
+          2.4,
+          5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 1,
+        "center_mm": [
+          -2.0,
+          -5.0
+        ],
+        "start_mm": [
+          -2.4,
+          -5.0
+        ],
+        "end_mm": [
+          -1.6,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 2,
+        "center_mm": [
+          0.0,
+          -5.0
+        ],
+        "start_mm": [
+          -0.4,
+          -5.0
+        ],
+        "end_mm": [
+          0.4,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 3,
+        "center_mm": [
+          2.0,
+          -5.0
+        ],
+        "start_mm": [
+          1.6,
+          -5.0
+        ],
+        "end_mm": [
+          2.4,
+          -5.0
+        ]
+      }
+    ],
+    "saved_paths_mm": [],
+    "current_path_mm": [],
+    "preview_point_mm": null,
+    "wire_profiles": [],
+    "wire_randomization": {
+      "ball_radius_mean_mm": 0.06,
+      "ball_radius_std_mm": 0.01,
+      "ball_height_mean_mm": 0.08,
+      "ball_height_std_mm": 0.015,
+      "arc_height_mean_mm": 0.5,
+      "arc_height_std_mm": 0.08,
+      "arc_xy_noise_mean_mm": 0.0,
+      "arc_xy_noise_std_mm": 0.05,
+      "wire_rise_mean_mm": 0.12,
+      "wire_rise_std_mm": 0.02,
+      "wire_diameter_mean_mm": 0.03,
+      "wire_diameter_std_mm": 0.004,
+      "wedge_length_mean_mm": 0.18,
+      "wedge_length_std_mm": 0.02,
+      "wedge_width_mean_mm": 0.08,
+      "wedge_width_std_mm": 0.01,
+      "wedge_thickness_mean_mm": 0.02,
+      "wedge_thickness_std_mm": 0.003,
+      "wedge_approach_mean_mm": 0.18,
+      "wedge_approach_std_mm": 0.02,
+      "wedge_tail_mean_mm": 0.0,
+      "wedge_tail_std_mm": 0.02
+    }
+  }
+}
