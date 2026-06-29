@@ -9,9 +9,10 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 import tkinter as tk
 
+import numpy as np
 import trimesh
 from vedo import Line, Mesh, Plotter, Text2D
 
@@ -29,9 +30,14 @@ DEFAULT_SCALE_PX_PER_MM = 24.0
 DEFAULT_BODY_COLOR = "#24201c"
 DEFAULT_LEAD_COLOR = "#d4af72"
 COMPONENT_CLEARANCE_MM = 0.1
+SIMULATION_PART_GAP_MM = 0.001
 SNAP_ANGLE_THRESHOLD_DEG = 12.0
 SNAP_HOVER_DELAY_MS = 2000
 POINT_AXIS_SNAP_THRESHOLD_PX = 10.0
+PATH_ANGLE_SNAP_THRESHOLD_DEG = 3.0
+LEADFRAME_MIRROR_VALIDATION_THRESHOLD_PX = 12.0
+LEADFRAME_KEEPOUT_SCALE = 1.1
+BOOLEAN_CLEANUP_EPSILON_MM = 0.005
 
 
 @dataclass(slots=True)
@@ -55,7 +61,7 @@ def read_bridge_payload(bridge_path: Path) -> dict:
     if not bridge_path.exists():
         return {}
     try:
-        payload = json.loads(bridge_path.read_text(encoding="utf-8"))
+        payload = json.loads(bridge_path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -113,6 +119,14 @@ def _simplify_profile_points(points: list[tuple[float, float]]) -> list[tuple[fl
                 continue
             filtered.append(current)
         simplified = filtered
+    return simplified
+
+
+def _simplify_path_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    simplified: list[tuple[float, float]] = []
+    for point in points:
+        if not simplified or point != simplified[-1]:
+            simplified.append(point)
     return simplified
 
 
@@ -274,6 +288,235 @@ def _coerce_int(value, fallback: int) -> int:
         return fallback
 
 
+def _polygon_centroid(points: list[tuple[float, float]]) -> tuple[float, float]:
+    if len(points) < 3:
+        return (0.0, 0.0)
+    signed_area = _signed_area(points)
+    if abs(signed_area) <= 1e-9:
+        avg_x = sum(point[0] for point in points) / len(points)
+        avg_y = sum(point[1] for point in points) / len(points)
+        return (avg_x, avg_y)
+    factor = 1.0 / (6.0 * signed_area)
+    centroid_x = 0.0
+    centroid_y = 0.0
+    for index, (x1, y1) in enumerate(points):
+        x2, y2 = points[(index + 1) % len(points)]
+        cross = (x1 * y2) - (x2 * y1)
+        centroid_x += (x1 + x2) * cross
+        centroid_y += (y1 + y2) * cross
+    return (centroid_x * factor, centroid_y * factor)
+
+
+def _leadframe_shapes_from_payload(payload: dict) -> list[list[tuple[float, float]]]:
+    shapes_payload = payload.get("leadframe_profiles_points_mm", [])
+    shapes: list[list[tuple[float, float]]] = []
+    if isinstance(shapes_payload, list):
+        for shape in shapes_payload:
+            if not isinstance(shape, list):
+                continue
+            points = [
+                tuple(point)
+                for point in shape
+                if isinstance(point, list | tuple) and len(point) == 2
+            ]
+            if points:
+                shapes.append(points)
+    if shapes:
+        return shapes
+    legacy_points = [
+        tuple(point)
+        for point in payload.get("leadframe_profile_points_mm", [])
+        if isinstance(point, list | tuple) and len(point) == 2
+    ]
+    return [legacy_points] if legacy_points else []
+
+
+def _leadframe_profiles_from_payload(payload: dict) -> list[LeadProfile]:
+    profiles_payload = payload.get("leadframe_profiles", [])
+    profiles: list[LeadProfile] = []
+    if isinstance(profiles_payload, list):
+        for profile_payload in profiles_payload:
+            if not isinstance(profile_payload, dict):
+                continue
+            points = [
+                tuple(point)
+                for point in profile_payload.get("points_mm", [])
+                if isinstance(point, list | tuple) and len(point) == 2
+            ]
+            if not points:
+                continue
+            profiles.append(LeadProfile(points_mm=points, closed=bool(profile_payload.get("closed", False))))
+    if profiles:
+        return profiles
+    return [LeadProfile(points_mm=shape, closed=True) for shape in _leadframe_shapes_from_payload(payload)]
+
+
+def _combined_leadframe_centroid(shapes: list[list[tuple[float, float]]]) -> tuple[float, float]:
+    weighted_x = 0.0
+    weighted_y = 0.0
+    total_weight = 0.0
+    for points in shapes:
+        if len(points) < 3:
+            continue
+        area = abs(_signed_area(points))
+        if area <= 1e-9:
+            continue
+        centroid_x, centroid_y = _polygon_centroid(points)
+        weighted_x += centroid_x * area
+        weighted_y += centroid_y * area
+        total_weight += area
+    if total_weight > 1e-9:
+        return (weighted_x / total_weight, weighted_y / total_weight)
+    flattened = [point for shape in shapes for point in shape]
+    if flattened:
+        return (
+            sum(point[0] for point in flattened) / len(flattened),
+            sum(point[1] for point in flattened) / len(flattened),
+        )
+    return (0.0, 0.0)
+
+
+def _lead_profile_join_distance_mm(profile_points: list[tuple[float, float]]) -> float:
+    if len(profile_points) >= 2:
+        return max(0.01, math.dist(profile_points[0], profile_points[-1]))
+    if profile_points:
+        x_values = [point[0] for point in profile_points]
+        y_values = [point[1] for point in profile_points]
+        return max(0.01, min(max(x_values) - min(x_values), max(y_values) - min(y_values), 0.2))
+    return 0.01
+
+
+def _normalize_2d(vector_xy: tuple[float, float]) -> tuple[float, float] | None:
+    length = math.hypot(vector_xy[0], vector_xy[1])
+    if length <= 1e-12:
+        return None
+    return (vector_xy[0] / length, vector_xy[1] / length)
+
+
+def _left_normal_2d(direction_xy: tuple[float, float]) -> tuple[float, float]:
+    return (-direction_xy[1], direction_xy[0])
+
+
+def _line_intersection_2d(
+    point_a: tuple[float, float],
+    direction_a: tuple[float, float],
+    point_b: tuple[float, float],
+    direction_b: tuple[float, float],
+) -> tuple[float, float] | None:
+    denominator = (direction_a[0] * direction_b[1]) - (direction_a[1] * direction_b[0])
+    if abs(denominator) <= 1e-12:
+        return None
+    delta_x = point_b[0] - point_a[0]
+    delta_y = point_b[1] - point_a[1]
+    factor_a = ((delta_x * direction_b[1]) - (delta_y * direction_b[0])) / denominator
+    return (
+        point_a[0] + (direction_a[0] * factor_a),
+        point_a[1] + (direction_a[1] * factor_a),
+    )
+
+
+def _build_stroked_path_polygon(points_mm: list[tuple[float, float]], width_mm: float) -> list[tuple[float, float]]:
+    simplified_points = _simplify_path_points(points_mm)
+    if len(simplified_points) < 2:
+        raise ValueError("Path needs at least 2 unique points.")
+    half_width_mm = width_mm / 2.0
+    segment_directions: list[tuple[float, float]] = []
+    segment_normals: list[tuple[float, float]] = []
+    for start_point_mm, end_point_mm in zip(simplified_points[:-1], simplified_points[1:]):
+        direction_xy = _normalize_2d((end_point_mm[0] - start_point_mm[0], end_point_mm[1] - start_point_mm[1]))
+        if direction_xy is None:
+            continue
+        segment_directions.append(direction_xy)
+        segment_normals.append(_left_normal_2d(direction_xy))
+    if not segment_directions:
+        raise ValueError("Path segments are degenerate.")
+
+    left_points: list[tuple[float, float]] = [(
+        simplified_points[0][0] + (segment_normals[0][0] * half_width_mm),
+        simplified_points[0][1] + (segment_normals[0][1] * half_width_mm),
+    )]
+    right_points: list[tuple[float, float]] = [(
+        simplified_points[0][0] - (segment_normals[0][0] * half_width_mm),
+        simplified_points[0][1] - (segment_normals[0][1] * half_width_mm),
+    )]
+
+    for vertex_index in range(1, len(simplified_points) - 1):
+        point_mm = simplified_points[vertex_index]
+        prev_direction = segment_directions[vertex_index - 1]
+        next_direction = segment_directions[vertex_index]
+        prev_normal = segment_normals[vertex_index - 1]
+        next_normal = segment_normals[vertex_index]
+
+        left_intersection = _line_intersection_2d(
+            (point_mm[0] + (prev_normal[0] * half_width_mm), point_mm[1] + (prev_normal[1] * half_width_mm)),
+            prev_direction,
+            (point_mm[0] + (next_normal[0] * half_width_mm), point_mm[1] + (next_normal[1] * half_width_mm)),
+            next_direction,
+        )
+        if left_intersection is None:
+            average_left = _normalize_2d((prev_normal[0] + next_normal[0], prev_normal[1] + next_normal[1]))
+            if average_left is None:
+                average_left = prev_normal
+            left_intersection = (
+                point_mm[0] + (average_left[0] * half_width_mm),
+                point_mm[1] + (average_left[1] * half_width_mm),
+            )
+        left_points.append(left_intersection)
+
+        right_intersection = _line_intersection_2d(
+            (point_mm[0] - (prev_normal[0] * half_width_mm), point_mm[1] - (prev_normal[1] * half_width_mm)),
+            prev_direction,
+            (point_mm[0] - (next_normal[0] * half_width_mm), point_mm[1] - (next_normal[1] * half_width_mm)),
+            next_direction,
+        )
+        if right_intersection is None:
+            average_right = _normalize_2d((-(prev_normal[0] + next_normal[0]), -(prev_normal[1] + next_normal[1])))
+            if average_right is None:
+                average_right = (-prev_normal[0], -prev_normal[1])
+            right_intersection = (
+                point_mm[0] + (average_right[0] * half_width_mm),
+                point_mm[1] + (average_right[1] * half_width_mm),
+            )
+        right_points.append(right_intersection)
+
+    last_normal = segment_normals[-1]
+    left_points.append((
+        simplified_points[-1][0] + (last_normal[0] * half_width_mm),
+        simplified_points[-1][1] + (last_normal[1] * half_width_mm),
+    ))
+    right_points.append((
+        simplified_points[-1][0] - (last_normal[0] * half_width_mm),
+        simplified_points[-1][1] - (last_normal[1] * half_width_mm),
+    ))
+    return left_points + list(reversed(right_points))
+
+
+def _build_path_segment_mesh(
+    start_point_mm: tuple[float, float],
+    end_point_mm: tuple[float, float],
+    width_mm: float,
+    height_mm: float,
+    z_center_mm: float,
+) -> trimesh.Trimesh | None:
+    dx = end_point_mm[0] - start_point_mm[0]
+    dy = end_point_mm[1] - start_point_mm[1]
+    length_mm = math.hypot(dx, dy)
+    if length_mm <= 1e-9:
+        return None
+    mesh = trimesh.creation.box(extents=(length_mm, width_mm, height_mm))
+    angle_rad = math.atan2(dy, dx)
+    transform = matrix_multiply(
+        translation_transform(
+            (start_point_mm[0] + end_point_mm[0]) / 2.0,
+            (start_point_mm[1] + end_point_mm[1]) / 2.0,
+            z_center_mm,
+        ),
+        rotation_matrix_xyz((0.0, 0.0, math.degrees(angle_rad))),
+    )
+    mesh.apply_transform(transform)
+    return mesh
+
+
 def build_ic_meshes(payload: dict) -> tuple[trimesh.Trimesh | None, list[tuple[str, trimesh.Trimesh]]]:
     raw_points = payload.get("profile_points_mm", [])
     profile_points = [tuple(point) for point in raw_points if isinstance(point, list | tuple) and len(point) == 2]
@@ -287,7 +530,7 @@ def build_ic_meshes(payload: dict) -> tuple[trimesh.Trimesh | None, list[tuple[s
     body_height_mm = float(payload.get("body_height_mm", 0.0))
     if body_width_mm <= 0.0 or body_depth_mm <= 0.0 or body_height_mm <= 0.0:
         raise ValueError("Body width, depth, and height must be positive.")
-    lead_offset_mm = float(payload.get("lead_offset_mm", 0.0))
+    lead_offset_mm = float(payload.get("lead_offset_mm", 0.0)) + SIMULATION_PART_GAP_MM
 
     base_leg = extrude_closed_polygon(profile_points, leg_length_mm)
     side_payloads = payload.get("side_settings", [])
@@ -381,61 +624,100 @@ def build_die_leadframe_mesh(
     payload: dict,
     side_meshes: list[tuple[str, trimesh.Trimesh]],
 ) -> tuple[trimesh.Trimesh | None, dict[str, float]]:
+    body_height_mm = float(payload.get("body_height_mm", 0.0))
     body_width_mm = float(payload.get("body_width_mm", 0.0))
     body_depth_mm = float(payload.get("body_depth_mm", 0.0))
-    body_height_mm = float(payload.get("body_height_mm", 0.0))
-    ratio_percent = float(payload.get("die_leadframe_ratio_percent", 80.0))
-    clearance_mm = max(0.0, float(payload.get("die_leadframe_clearance_mm", 0.05)))
+    requested_width_mm = max(0.01, float(payload.get("die_leadframe_width_mm", max(body_width_mm * 0.8, 0.01))))
+    requested_depth_mm = max(0.01, float(payload.get("die_leadframe_depth_mm", max(body_depth_mm * 0.8, 0.01))))
     thickness_mm = max(0.01, float(payload.get("die_leadframe_thickness_mm", 0.08)))
+    center_mode = str(payload.get("die_leadframe_center_mode", "region_centroid")).strip().lower()
+    custom_center_x_mm = float(payload.get("die_leadframe_center_x_mm", 0.0))
+    custom_center_y_mm = float(payload.get("die_leadframe_center_y_mm", 0.0))
     if body_width_mm <= 0.0 or body_depth_mm <= 0.0:
         return None, {}
-
-    body_left = -body_width_mm / 2.0
-    body_right = body_width_mm / 2.0
-    body_bottom = -body_depth_mm / 2.0
-    body_top = body_depth_mm / 2.0
-
-    left_limit = body_left
-    right_limit = body_right
-    bottom_limit = body_bottom
-    top_limit = body_top
-
-    for side_name, mesh in side_meshes:
-        min_corner = mesh.bounds[0].tolist()
-        max_corner = mesh.bounds[1].tolist()
-        if side_name == "Left":
-            left_limit = max(left_limit, max_corner[0] + clearance_mm)
-        elif side_name == "Right":
-            right_limit = min(right_limit, min_corner[0] - clearance_mm)
-        elif side_name == "Top":
-            top_limit = min(top_limit, min_corner[1] - clearance_mm)
-        elif side_name == "Bottom":
-            bottom_limit = max(bottom_limit, max_corner[1] + clearance_mm)
-
-    max_half_width = max(0.0, min(abs(left_limit), abs(right_limit)))
-    max_half_depth = max(0.0, min(abs(bottom_limit), abs(top_limit)))
-    desired_half_width = (body_width_mm * max(1.0, min(100.0, ratio_percent)) / 100.0) / 2.0
-    desired_half_depth = (body_depth_mm * max(1.0, min(100.0, ratio_percent)) / 100.0) / 2.0
-    final_half_width = min(desired_half_width, max_half_width)
-    final_half_depth = min(desired_half_depth, max_half_depth)
-    if final_half_width <= 0.0 or final_half_depth <= 0.0:
-        return None, {
-            "final_width_mm": 0.0,
-            "final_depth_mm": 0.0,
-            "ratio_percent": ratio_percent,
-        }
+    leadframe_shapes = _leadframe_shapes_from_payload(payload)
+    region_center_x_mm, region_center_y_mm = _combined_leadframe_centroid(leadframe_shapes)
+    if center_mode == "custom_point":
+        center_x_mm = custom_center_x_mm
+        center_y_mm = custom_center_y_mm
+    else:
+        center_x_mm = region_center_x_mm
+        center_y_mm = region_center_y_mm
 
     mesh = trimesh.creation.box(
-        extents=(final_half_width * 2.0, final_half_depth * 2.0, thickness_mm),
+        extents=(requested_width_mm, requested_depth_mm, thickness_mm),
     )
-    mesh.apply_translation([0.0, 0.0, body_height_mm + COMPONENT_CLEARANCE_MM + (thickness_mm / 2.0)])
+    mesh.apply_translation([center_x_mm, center_y_mm, body_height_mm + SIMULATION_PART_GAP_MM + (thickness_mm / 2.0)])
     return mesh, {
-        "final_width_mm": final_half_width * 2.0,
-        "final_depth_mm": final_half_depth * 2.0,
-        "ratio_percent": ratio_percent,
-        "clearance_mm": clearance_mm,
+        "final_width_mm": requested_width_mm,
+        "final_depth_mm": requested_depth_mm,
         "thickness_mm": thickness_mm,
+        "center_mode": center_mode,
+        "center_x_mm": center_x_mm,
+        "center_y_mm": center_y_mm,
+        "source_region_shape_count": len(leadframe_shapes),
     }
+
+
+def build_sketched_leadframe_meshes(payload: dict) -> list[trimesh.Trimesh]:
+    profile_points = [
+        tuple(point)
+        for point in payload.get("profile_points_mm", [])
+        if isinstance(point, list | tuple) and len(point) == 2
+    ]
+    leadframe_profiles = _leadframe_profiles_from_payload(payload)
+    body_height_mm = float(payload.get("body_height_mm", 0.0))
+    path_width_mm = max(0.01, float(payload.get("leadframe_path_width_mm", 0.3)))
+    if not profile_points or not leadframe_profiles or body_height_mm <= 0.0:
+        return []
+
+    try:
+        _body_mesh, side_meshes = build_ic_meshes(payload)
+    except Exception:
+        side_meshes = []
+    extrusion_height_mm = max(0.01, float(payload.get("leadframe_path_thickness_mm", 1.0)))
+    # Keep the lead-frame paths slightly above the package body so they do not share triangles.
+    z_offset_mm = body_height_mm + SIMULATION_PART_GAP_MM
+    meshes: list[trimesh.Trimesh] = []
+    z_center_mm = z_offset_mm + (extrusion_height_mm / 2.0)
+    for profile in leadframe_profiles:
+        if profile.closed and len(profile.points_mm) >= 3:
+            try:
+                mesh = extrude_closed_polygon(profile.points_mm, extrusion_height_mm)
+            except Exception:
+                continue
+            mesh.apply_translation([0.0, 0.0, z_offset_mm])
+            meshes.append(mesh)
+            continue
+        if len(profile.points_mm) < 2:
+            continue
+        try:
+            stroked_polygon_points = _build_stroked_path_polygon(profile.points_mm, path_width_mm)
+            mesh = extrude_closed_polygon(stroked_polygon_points, extrusion_height_mm)
+        except Exception:
+            segment_meshes: list[trimesh.Trimesh] = []
+            for start_point_mm, end_point_mm in zip(profile.points_mm[:-1], profile.points_mm[1:]):
+                segment_mesh = _build_path_segment_mesh(start_point_mm, end_point_mm, path_width_mm, extrusion_height_mm, z_center_mm)
+                if segment_mesh is not None:
+                    segment_meshes.append(segment_mesh)
+            if segment_meshes:
+                meshes.append(trimesh.util.concatenate(segment_meshes))
+            continue
+        mesh.apply_translation([0.0, 0.0, z_offset_mm])
+        meshes.append(mesh)
+    return meshes
+
+
+def build_combined_lead_system_mesh(
+    payload: dict,
+    side_meshes: list[tuple[str, trimesh.Trimesh]],
+) -> tuple[trimesh.Trimesh | None, list[trimesh.Trimesh]]:
+    sketched_leadframe_meshes = build_sketched_leadframe_meshes(payload)
+    lead_meshes = [mesh for _side_name, mesh in side_meshes]
+    combined_parts = lead_meshes + sketched_leadframe_meshes
+    if not combined_parts:
+        return None, sketched_leadframe_meshes
+    return trimesh.util.concatenate(combined_parts), sketched_leadframe_meshes
 
 
 def build_silicon_die_mesh(
@@ -463,7 +745,7 @@ def build_silicon_die_mesh(
     top_z = max_corner[2]
 
     mesh = trimesh.creation.box(extents=(final_width_mm, final_depth_mm, thickness_mm))
-    mesh.apply_translation([center_x, center_y, top_z + COMPONENT_CLEARANCE_MM + (thickness_mm / 2.0)])
+    mesh.apply_translation([center_x, center_y, top_z + SIMULATION_PART_GAP_MM + (thickness_mm / 2.0)])
     return mesh, {
         "final_width_mm": final_width_mm,
         "final_depth_mm": final_depth_mm,
@@ -512,6 +794,53 @@ def build_leg_pick_markers(
     return markers
 
 
+def build_leadframe_path_end_markers(payload: dict) -> list[dict]:
+    leadframe_profiles = _leadframe_profiles_from_payload(payload)
+    body_height_mm = float(payload.get("body_height_mm", 0.0))
+    thickness_mm = max(0.01, float(payload.get("leadframe_path_thickness_mm", 1.0)))
+    pick_distance_mm = float(payload.get("leg_pick_distance_mm", 0.2))
+    marker_size_mm = max(0.02, float(payload.get("leg_pick_marker_size_mm", 0.08)))
+    marker_thickness_mm = min(marker_size_mm * 0.25, 0.02)
+    if body_height_mm <= 0.0:
+        return []
+
+    anchor_z = body_height_mm + SIMULATION_PART_GAP_MM + thickness_mm + COMPONENT_CLEARANCE_MM
+    markers: list[dict] = []
+    for profile in leadframe_profiles:
+        if profile.closed or len(profile.points_mm) < 2:
+            continue
+        end_x, end_y = profile.points_mm[-1]
+        previous_x, previous_y = profile.points_mm[-2]
+        start_x, start_y = profile.points_mm[0]
+        dx = end_x - start_x
+        dy = end_y - start_y
+        segment_dx = previous_x - end_x
+        segment_dy = previous_y - end_y
+        segment_length = math.hypot(segment_dx, segment_dy)
+        if segment_length > 1e-9:
+            offset_distance_mm = max(-segment_length, min(segment_length, pick_distance_mm))
+            target_x = end_x + ((segment_dx / segment_length) * offset_distance_mm)
+            target_y = end_y + ((segment_dy / segment_length) * offset_distance_mm)
+        else:
+            target_x = end_x
+            target_y = end_y
+        if abs(dx) >= abs(dy):
+            side_name = "Right" if dx >= 0.0 else "Left"
+        else:
+            side_name = "Top" if dy >= 0.0 else "Bottom"
+        marker = trimesh.creation.box(extents=(marker_size_mm, marker_size_mm, marker_thickness_mm))
+        marker.apply_translation([target_x, target_y, anchor_z - (COMPONENT_CLEARANCE_MM / 2.0)])
+        markers.append(
+            {
+                "side_name": side_name,
+                "mesh": marker,
+                "center_xy": (target_x, target_y),
+                "anchor_xyz": (target_x, target_y, anchor_z),
+            }
+        )
+    return markers
+
+
 def build_die_region_meshes_and_pick(
     payload: dict,
     silicon_die_mesh: trimesh.Trimesh | None,
@@ -542,10 +871,11 @@ def build_die_region_meshes_and_pick(
     top_bottom_depth = min(depth_mm, max_vertical_band) if max_vertical_band > 0.0 else 0.0
     left_right_depth = min(depth_mm, max_horizontal_band) if max_horizontal_band > 0.0 else 0.0
 
-    side_counts = {
-        str(item.get("name", "")).strip().title(): max(0, int(item.get("count", 0)))
-        for item in payload.get("side_settings", [])
-        if isinstance(item, dict)
+    region_counts = {
+        "Top": max(0, int(float(payload.get("die_region_top_count", 0)))),
+        "Bottom": max(0, int(float(payload.get("die_region_bottom_count", 0)))),
+        "Left": max(0, int(float(payload.get("die_region_left_count", 0)))),
+        "Right": max(0, int(float(payload.get("die_region_right_count", 0)))),
     }
 
     regions: list[dict] = []
@@ -583,10 +913,10 @@ def build_die_region_meshes_and_pick(
                 }
             )
 
-    add_segmented_regions("Top", side_counts.get("Top", 0), horizontal_span, top_bottom_depth)
-    add_segmented_regions("Bottom", side_counts.get("Bottom", 0), horizontal_span, top_bottom_depth)
-    add_segmented_regions("Left", side_counts.get("Left", 0), vertical_span, left_right_depth)
-    add_segmented_regions("Right", side_counts.get("Right", 0), vertical_span, left_right_depth)
+    add_segmented_regions("Top", region_counts.get("Top", 0), horizontal_span, top_bottom_depth)
+    add_segmented_regions("Bottom", region_counts.get("Bottom", 0), horizontal_span, top_bottom_depth)
+    add_segmented_regions("Left", region_counts.get("Left", 0), vertical_span, left_right_depth)
+    add_segmented_regions("Right", region_counts.get("Right", 0), vertical_span, left_right_depth)
 
     selected_region = str(payload.get("die_pick_region", "Top")).strip().title()
     selected_section_index = max(1, int(float(payload.get("die_pick_section_index", 1))))
@@ -619,6 +949,7 @@ def build_die_region_meshes_and_pick(
         "top_bottom_depth_mm": top_bottom_depth,
         "left_right_depth_mm": left_right_depth,
         "region_count": len(regions),
+        "side_region_counts": region_counts,
     }
 
 
@@ -642,6 +973,25 @@ def _clockwise_indexed_items(items: list[dict]) -> list[dict]:
         return (order, secondary)
 
     return sorted(items, key=sort_key)
+
+
+def _pair_nearest_leg_regions(leg_markers: list[dict], die_regions: list[dict]) -> list[tuple[dict, dict]]:
+    if not leg_markers or not die_regions:
+        return []
+
+    remaining_regions = list(die_regions)
+    pairs: list[tuple[dict, dict]] = []
+    for leg_data in leg_markers:
+        leg_x, leg_y = leg_data.get("center_xy", (0.0, 0.0))
+        nearest_index = min(
+            range(len(remaining_regions)),
+            key=lambda index: math.dist((leg_x, leg_y), remaining_regions[index].get("center_xy", (0.0, 0.0))),
+        )
+        region_data = remaining_regions.pop(nearest_index)
+        pairs.append((leg_data, region_data))
+        if not remaining_regions:
+            break
+    return pairs
 
 
 def _sample_cubic_bezier(
@@ -691,31 +1041,59 @@ def _sample_catmull_rom_spline(control_points: list[tuple[float, float, float]],
             for index in range(sample_count + 1)
         ]
 
+    def point_distance(point_a: tuple[float, float, float], point_b: tuple[float, float, float]) -> float:
+        return math.dist(point_a, point_b)
+
+    def tj(ti: float, point_a: tuple[float, float, float], point_b: tuple[float, float, float]) -> float:
+        return ti + max(point_distance(point_a, point_b), 1e-9) ** 0.5
+
+    def interpolate(
+        point_a: tuple[float, float, float],
+        point_b: tuple[float, float, float],
+        ta: float,
+        tb: float,
+        t_value: float,
+    ) -> tuple[float, float, float]:
+        if abs(tb - ta) <= 1e-9:
+            return point_a
+        blend_a = (tb - t_value) / (tb - ta)
+        blend_b = (t_value - ta) / (tb - ta)
+        return (
+            (point_a[0] * blend_a) + (point_b[0] * blend_b),
+            (point_a[1] * blend_a) + (point_b[1] * blend_b),
+            (point_a[2] * blend_a) + (point_b[2] * blend_b),
+        )
+
     extended_points = [control_points[0], *control_points, control_points[-1]]
     segment_count = len(control_points) - 1
     spline_points: list[list[float]] = []
 
-    for sample_index in range(sample_count + 1):
-        t_global = sample_index / sample_count
-        segment_position = min(segment_count - 1e-9, t_global * segment_count)
-        segment_index = min(segment_count - 1, int(segment_position))
-        t_local = segment_position - segment_index
-
+    for segment_index in range(segment_count):
         p0 = extended_points[segment_index]
         p1 = extended_points[segment_index + 1]
         p2 = extended_points[segment_index + 2]
         p3 = extended_points[segment_index + 3]
 
-        point_coords: list[float] = []
-        for axis_index in range(3):
-            coord = 0.5 * (
-                (2.0 * p1[axis_index])
-                + ((-p0[axis_index] + p2[axis_index]) * t_local)
-                + ((2.0 * p0[axis_index] - 5.0 * p1[axis_index] + 4.0 * p2[axis_index] - p3[axis_index]) * (t_local ** 2))
-                + ((-p0[axis_index] + 3.0 * p1[axis_index] - 3.0 * p2[axis_index] + p3[axis_index]) * (t_local ** 3))
-            )
-            point_coords.append(coord)
-        spline_points.append(point_coords)
+        t0 = 0.0
+        t1 = tj(t0, p0, p1)
+        t2 = tj(t1, p1, p2)
+        t3 = tj(t2, p2, p3)
+
+        segment_samples = max(2, int(round(sample_count / segment_count)))
+        if segment_index == segment_count - 1:
+            segment_range = range(segment_samples + 1)
+        else:
+            segment_range = range(segment_samples)
+
+        for local_index in segment_range:
+            t_value = t1 + ((t2 - t1) * (local_index / segment_samples))
+            a1 = interpolate(p0, p1, t0, t1, t_value)
+            a2 = interpolate(p1, p2, t1, t2, t_value)
+            a3 = interpolate(p2, p3, t2, t3, t_value)
+            b1 = interpolate(a1, a2, t0, t2, t_value)
+            b2 = interpolate(a2, a3, t1, t3, t_value)
+            point = interpolate(b1, b2, t1, t2, t_value)
+            spline_points.append([point[0], point[1], point[2]])
 
     spline_points[0] = list(control_points[0])
     spline_points[-1] = list(control_points[-1])
@@ -791,6 +1169,10 @@ def _vector_cross(a_vec: tuple[float, float, float], b_vec: tuple[float, float, 
     )
 
 
+def _vector_dot(a_vec: tuple[float, float, float], b_vec: tuple[float, float, float]) -> float:
+    return (a_vec[0] * b_vec[0]) + (a_vec[1] * b_vec[1]) + (a_vec[2] * b_vec[2])
+
+
 def _vector_lerp(a_vec: tuple[float, float, float], b_vec: tuple[float, float, float], t_value: float) -> tuple[float, float, float]:
     return (
         a_vec[0] + ((b_vec[0] - a_vec[0]) * t_value),
@@ -799,16 +1181,105 @@ def _vector_lerp(a_vec: tuple[float, float, float], b_vec: tuple[float, float, f
     )
 
 
+def _choose_frame_reference(tangent: tuple[float, float, float]) -> tuple[float, float, float]:
+    for candidate in ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)):
+        if _vector_length(_vector_cross(candidate, tangent)) > 1e-6:
+            return candidate
+    return (1.0, 0.0, 0.0)
+
+
+def _build_swept_tube_mesh(
+    points: list[tuple[float, float, float]],
+    radius_mm: float,
+    side_count: int,
+) -> trimesh.Trimesh | None:
+    if len(points) < 2:
+        return None
+
+    tangents: list[tuple[float, float, float]] = []
+    for index in range(len(points)):
+        if index == 0:
+            tangent = _vector_normalize(_vector_sub(points[1], points[0]))
+        elif index == len(points) - 1:
+            tangent = _vector_normalize(_vector_sub(points[-1], points[-2]))
+        else:
+            tangent = _vector_normalize(_vector_sub(points[index + 1], points[index - 1]))
+        tangents.append(tangent)
+
+    sections: list[list[tuple[float, float, float]]] = []
+    lateral: tuple[float, float, float] | None = None
+    vertical: tuple[float, float, float] | None = None
+    for center, tangent in zip(points, tangents):
+        if lateral is None or vertical is None:
+            reference = _choose_frame_reference(tangent)
+            lateral = _vector_normalize(_vector_cross(reference, tangent))
+            vertical = _vector_normalize(_vector_cross(tangent, lateral))
+        else:
+            projected_lateral = _vector_sub(lateral, _vector_scale(tangent, _vector_dot(lateral, tangent)))
+            if _vector_length(projected_lateral) <= 1e-6:
+                projected_vertical = _vector_sub(vertical, _vector_scale(tangent, _vector_dot(vertical, tangent)))
+                if _vector_length(projected_vertical) > 1e-6:
+                    vertical = _vector_normalize(projected_vertical)
+                    projected_lateral = _vector_cross(vertical, tangent)
+                else:
+                    reference = _choose_frame_reference(tangent)
+                    projected_lateral = _vector_cross(reference, tangent)
+            lateral = _vector_normalize(projected_lateral)
+            vertical = _vector_normalize(_vector_cross(tangent, lateral))
+
+        section: list[tuple[float, float, float]] = []
+        for side_index in range(side_count):
+            angle = (2.0 * math.pi * side_index) / side_count
+            offset = _vector_add(
+                _vector_scale(lateral, math.cos(angle) * radius_mm),
+                _vector_scale(vertical, math.sin(angle) * radius_mm),
+            )
+            section.append(_vector_add(center, offset))
+        sections.append(section)
+
+    vertices: list[list[float]] = []
+    for section in sections:
+        for vertex in section:
+            vertices.append([vertex[0], vertex[1], vertex[2]])
+
+    faces: list[list[int]] = []
+    section_size = side_count
+    for section_index in range(len(sections) - 1):
+        base_index = section_index * section_size
+        next_index = (section_index + 1) * section_size
+        for vertex_index in range(section_size):
+            current_a = base_index + vertex_index
+            current_b = base_index + ((vertex_index + 1) % section_size)
+            next_a = next_index + vertex_index
+            next_b = next_index + ((vertex_index + 1) % section_size)
+            faces.append([current_a, next_a, next_b])
+            faces.append([current_a, next_b, current_b])
+
+    start_center_index = len(vertices)
+    vertices.append(list(points[0]))
+    for vertex_index in range(section_size):
+        next_vertex_index = (vertex_index + 1) % section_size
+        faces.append([start_center_index, next_vertex_index, vertex_index])
+
+    end_center_index = len(vertices)
+    vertices.append(list(points[-1]))
+    end_base_index = (len(sections) - 1) * section_size
+    for vertex_index in range(section_size):
+        next_vertex_index = (vertex_index + 1) % section_size
+        faces.append([end_center_index, end_base_index + vertex_index, end_base_index + next_vertex_index])
+
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
 def build_connection_paths(
     payload: dict,
     leg_markers: list[dict],
     die_regions: list[dict],
     ball_bond_meshes: list[dict] | None = None,
 ) -> list[dict]:
-    indexed_leg_markers = _clockwise_indexed_items(leg_markers)
-    indexed_die_regions = _clockwise_indexed_items(die_regions)
-    pair_count = min(len(indexed_leg_markers), len(indexed_die_regions))
-    if pair_count <= 0:
+    resolved_leg_markers = build_leadframe_path_end_markers(payload) or _clockwise_indexed_items(leg_markers)
+    paired_anchors = _pair_nearest_leg_regions(resolved_leg_markers, die_regions)
+    if not paired_anchors:
         return []
 
     arc_height_mm = max(0.0, float(payload.get("arc_height_mm", 0.5)))
@@ -819,9 +1290,7 @@ def build_connection_paths(
     indexed_ball_bonds = ball_bond_meshes or []
     arcs: list[dict] = []
 
-    for index in range(pair_count):
-        leg_data = indexed_leg_markers[index]
-        die_data = indexed_die_regions[index]
+    for index, (leg_data, die_data) in enumerate(paired_anchors):
         bond_data = indexed_ball_bonds[index] if index < len(indexed_ball_bonds) else {}
         start = bond_data.get("wire_start_xyz", die_data.get("anchor_xyz", (0.0, 0.0, 0.0)))
         end = leg_data.get("anchor_xyz", (0.0, 0.0, 0.0))
@@ -848,19 +1317,20 @@ def build_connection_paths(
             landing_y = end_y - ((dy / planar_length) * landing_run_mm)
 
         rise_point = (start_x, start_y, start_z + wire_rise_z_mm)
-        arc_control_1 = (start_x, start_y, mid_z)
-        arc_control_2 = (landing_x, landing_y, end_z)
+        rise_control = (start_x, start_y, mid_z)
+        landing_height = end_z + min(max(wire_rise_z_mm * 0.15, 0.01), max(arc_height_mm * 0.2, 0.01))
+        landing_control = (landing_x, landing_y, landing_height)
         approximate_length = (
             math.dist(start, rise_point)
-            + math.dist(rise_point, arc_control_1)
-            + math.dist(arc_control_1, arc_control_2)
-            + math.dist(arc_control_2, end)
+            + math.dist(rise_point, rise_control)
+            + math.dist(rise_control, landing_control)
+            + math.dist(landing_control, end)
         )
-        sample_count = max(8, int(math.ceil(approximate_length / point_spacing_mm)))
+        sample_count = max(12, int(math.ceil(approximate_length / point_spacing_mm)))
 
         rise_length = math.dist(start, rise_point)
         rise_sample_count = max(2, int(math.ceil(rise_length / point_spacing_mm)))
-        arc_sample_count = max(6, sample_count - rise_sample_count + 1)
+        curve_sample_count = max(8, sample_count - rise_sample_count + 1)
 
         rise_points = [
             [
@@ -870,8 +1340,8 @@ def build_connection_paths(
             ]
             for sample_index in range(rise_sample_count + 1)
         ]
-        arc_points = _sample_cubic_bezier(rise_point, arc_control_1, arc_control_2, end, arc_sample_count)
-        points = rise_points[:-1] + arc_points
+        curve_points = _sample_cubic_bezier(rise_point, rise_control, landing_control, end, curve_sample_count)
+        points = rise_points[:-1] + curve_points
 
         arcs.append(
             {
@@ -893,10 +1363,9 @@ def build_ball_bond_meshes(
     leg_markers: list[dict],
     die_regions: list[dict],
 ) -> list[dict]:
-    indexed_leg_markers = _clockwise_indexed_items(leg_markers)
-    indexed_die_regions = _clockwise_indexed_items(die_regions)
-    pair_count = min(len(indexed_leg_markers), len(indexed_die_regions))
-    if pair_count <= 0:
+    resolved_leg_markers = build_leadframe_path_end_markers(payload) or _clockwise_indexed_items(leg_markers)
+    paired_anchors = _pair_nearest_leg_regions(resolved_leg_markers, die_regions)
+    if not paired_anchors:
         return []
 
     diameter_mm = max(0.02, float(payload.get("ball_bond_diameter_mm", 0.12)))
@@ -924,8 +1393,7 @@ def build_ball_bond_meshes(
     )
 
     meshes: list[dict] = []
-    for index in range(pair_count):
-        die_data = indexed_die_regions[index]
+    for index, (_leg_data, die_data) in enumerate(paired_anchors):
         anchor_x, anchor_y, anchor_z = die_data.get("anchor_xyz", (0.0, 0.0, 0.0))
         bond_mesh = trimesh.Trimesh(vertices=base_mesh.vertices.copy(), faces=base_mesh.faces.copy(), process=False)
         bond_mesh.apply_translation([anchor_x, anchor_y, anchor_z])
@@ -957,26 +1425,15 @@ def build_tube_connection_meshes(
     wire_radius_mm = max(0.005, float(payload.get("wire_diameter_mm", 0.03)) / 2.0)
     tube_meshes: list[dict] = []
     for path_data in connection_paths:
-        points = _trim_polyline_from_end(path_data.get("points", []), trim_end_distance_mm)
+        points = [tuple(point) for point in _trim_polyline_from_end(path_data.get("points", []), trim_end_distance_mm)]
         if len(points) < 2:
             continue
-        segment_meshes: list[trimesh.Trimesh] = []
-        for start_point, end_point in zip(points[:-1], points[1:]):
-            segment_length = math.dist(start_point, end_point)
-            if segment_length <= 1e-9:
-                continue
-            segment_meshes.append(
-                trimesh.creation.cylinder(
-                    radius=wire_radius_mm,
-                    segment=[start_point, end_point],
-                    sections=tube_side_count,
-                )
-            )
-        if not segment_meshes:
+        swept_mesh = _build_swept_tube_mesh(points, wire_radius_mm, tube_side_count)
+        if swept_mesh is None:
             continue
         tube_meshes.append(
             {
-                "mesh": trimesh.util.concatenate(segment_meshes),
+                "mesh": swept_mesh,
                 "leg_index": path_data["leg_index"],
                 "die_index": path_data["die_index"],
                 "leg_side_name": path_data["leg_side_name"],
@@ -1201,6 +1658,563 @@ def build_ball_bond_wire_assembly_meshes(
     return assemblies
 
 
+def build_selected_bond_assemblies(
+    current_step_index: int,
+    ball_bond_meshes: list[dict],
+    ball_bond_wire_meshes: list[dict],
+    ball_bond_terminal_meshes: list[dict],
+) -> list[dict]:
+    if current_step_index >= 13:
+        return ball_bond_terminal_meshes
+    if current_step_index >= 12:
+        return ball_bond_wire_meshes
+    if current_step_index >= 11:
+        return ball_bond_meshes
+    return []
+
+
+def _expand_mesh_from_centroid(mesh: trimesh.Trimesh, offset_mm: float) -> trimesh.Trimesh:
+    expanded = trimesh.Trimesh(vertices=mesh.vertices.copy(), faces=mesh.faces.copy(), process=False)
+    if offset_mm <= 1e-9:
+        return expanded
+
+    min_corner = expanded.bounds[0]
+    max_corner = expanded.bounds[1]
+    extents = max_corner - min_corner
+    if len(extents) != 3 or float(np.max(extents)) <= 1e-9:
+        return expanded
+
+    centroid = expanded.centroid
+    centered_vertices = expanded.vertices - centroid
+    scale_factors = np.ones(3, dtype=float)
+    for axis_index in range(3):
+        axis_extent = float(extents[axis_index])
+        if axis_extent <= 1e-9:
+            continue
+        scale_factors[axis_index] = (axis_extent + (2.0 * offset_mm)) / axis_extent
+    expanded.vertices = centroid + (centered_vertices * scale_factors)
+    try:
+        expanded.remove_unreferenced_vertices()
+        expanded.merge_vertices()
+        expanded.fix_normals()
+    except Exception:
+        pass
+    return expanded
+
+
+def _solid_mesh_components(mesh: trimesh.Trimesh, volume_epsilon: float = 1e-9) -> list[trimesh.Trimesh]:
+    try:
+        components = mesh.split(only_watertight=False)
+    except Exception:
+        components = [mesh]
+
+    solid_components: list[trimesh.Trimesh] = []
+    for component in components:
+        if not isinstance(component, trimesh.Trimesh) or len(component.faces) == 0:
+            continue
+        candidate = trimesh.Trimesh(vertices=component.vertices.copy(), faces=component.faces.copy(), process=False)
+        try:
+            candidate.remove_unreferenced_vertices()
+            candidate.merge_vertices()
+            candidate.fix_normals()
+        except Exception:
+            pass
+        try:
+            is_solid = bool(candidate.is_watertight and abs(float(candidate.volume)) > volume_epsilon)
+        except Exception:
+            is_solid = bool(candidate.is_watertight)
+        if is_solid:
+            solid_components.append(candidate)
+    return solid_components
+
+
+def _subtract_meshes(
+    subject_mesh: trimesh.Trimesh,
+    cutter_meshes: list[tuple[str, trimesh.Trimesh]],
+) -> tuple[trimesh.Trimesh, list[str], dict[str, str]]:
+    result_mesh = trimesh.Trimesh(vertices=subject_mesh.vertices.copy(), faces=subject_mesh.faces.copy(), process=False)
+    warnings: list[str] = []
+    status_map: dict[str, str] = {}
+    for cutter_name, cutter_mesh in cutter_meshes:
+        solid_cutters = _solid_mesh_components(cutter_mesh)
+        if not solid_cutters:
+            warnings.append(f"Boolean subtract skipped for {cutter_name}: cutter is not a closed solid volume.")
+            status_map[cutter_name] = "skipped: not a closed solid volume"
+            continue
+        cutter_success = False
+        for component_index, solid_cutter in enumerate(solid_cutters, start=1):
+            try:
+                difference_mesh = trimesh.boolean.difference([result_mesh, solid_cutter])
+            except Exception as exc:
+                suffix = f" component {component_index}" if len(solid_cutters) > 1 else ""
+                warnings.append(f"Boolean subtract failed for {cutter_name}{suffix}: {exc}")
+                continue
+            if difference_mesh is None:
+                suffix = f" component {component_index}" if len(solid_cutters) > 1 else ""
+                warnings.append(f"Boolean subtract returned no mesh for {cutter_name}{suffix}.")
+                continue
+            if isinstance(difference_mesh, list):
+                valid_meshes = [mesh for mesh in difference_mesh if isinstance(mesh, trimesh.Trimesh)]
+                if not valid_meshes:
+                    suffix = f" component {component_index}" if len(solid_cutters) > 1 else ""
+                    warnings.append(f"Boolean subtract produced no valid mesh for {cutter_name}{suffix}.")
+                    continue
+                result_mesh = trimesh.util.concatenate(valid_meshes)
+            else:
+                result_mesh = difference_mesh
+            residual_faces_a, residual_faces_b = _find_intersecting_face_indices(result_mesh, solid_cutter, stop_at_first=True)
+            residual_intersection = bool(residual_faces_a and residual_faces_b)
+            if residual_intersection:
+                try:
+                    cleanup_cutter = _expand_mesh_from_centroid(solid_cutter, BOOLEAN_CLEANUP_EPSILON_MM)
+                    cleanup_difference = trimesh.boolean.difference([result_mesh, cleanup_cutter])
+                    if isinstance(cleanup_difference, list):
+                        cleanup_meshes = [mesh for mesh in cleanup_difference if isinstance(mesh, trimesh.Trimesh)]
+                        if cleanup_meshes:
+                            result_mesh = trimesh.util.concatenate(cleanup_meshes)
+                    elif isinstance(cleanup_difference, trimesh.Trimesh):
+                        result_mesh = cleanup_difference
+                    residual_faces_a, residual_faces_b = _find_intersecting_face_indices(result_mesh, solid_cutter, stop_at_first=True)
+                    residual_intersection = bool(residual_faces_a and residual_faces_b)
+                    if residual_intersection:
+                        suffix = f" component {component_index}" if len(solid_cutters) > 1 else ""
+                        warnings.append(
+                            f"Residual overlap remained after subtracting {cutter_name}{suffix}, even after cleanup epsilon."
+                        )
+                    else:
+                        suffix = f" component {component_index}" if len(solid_cutters) > 1 else ""
+                        warnings.append(
+                            f"Residual overlap for {cutter_name}{suffix} was cleaned with an extra {BOOLEAN_CLEANUP_EPSILON_MM:.3f} mm expansion."
+                        )
+                except Exception as exc:
+                    suffix = f" component {component_index}" if len(solid_cutters) > 1 else ""
+                    warnings.append(f"Cleanup subtract failed for {cutter_name}{suffix}: {exc}")
+            cutter_success = True
+        if cutter_success:
+            status_map[cutter_name] = "subtracted"
+        elif cutter_name not in status_map:
+            status_map[cutter_name] = "failed"
+    return result_mesh, warnings, status_map
+
+
+def build_encapsulation_meshes(
+    payload: dict,
+    body_mesh: trimesh.Trimesh | None,
+    side_meshes: list[tuple[str, trimesh.Trimesh]],
+    sketched_leadframe_meshes: list[trimesh.Trimesh],
+    die_leadframe_mesh: trimesh.Trimesh | None,
+    silicon_die_mesh: trimesh.Trimesh | None,
+    bond_assembly_meshes: list[dict],
+) -> tuple[dict[str, trimesh.Trimesh | None], list[str], dict[str, dict[str, str]]]:
+    if body_mesh is None:
+        return {"base": None, "top": None}, ["Encapsulation requires the step 6 base body."], {"base": {}, "top": {}}
+
+    body_width_mm = max(0.01, float(payload.get("body_width_mm", 0.0)))
+    body_depth_mm = max(0.01, float(payload.get("body_depth_mm", 0.0)))
+    body_height_mm = max(0.01, float(payload.get("body_height_mm", 0.0)))
+    encapsulation_height_mm = max(0.01, float(payload.get("encapsulation_height_mm", body_height_mm)))
+    clearance_mm = max(0.0, float(payload.get("simulation_clearance_mm", 0.001)))
+
+    top_mesh = trimesh.creation.box(extents=(body_width_mm, body_depth_mm, encapsulation_height_mm))
+    top_mesh.apply_translation([0.0, 0.0, body_height_mm + (encapsulation_height_mm / 2.0)])
+
+    cutter_sources: list[tuple[str, trimesh.Trimesh | None]] = []
+    for lead_index, (_side_name, lead_mesh) in enumerate(side_meshes, start=1):
+        cutter_sources.append((f"Lead System {lead_index}", lead_mesh))
+    for path_index, path_mesh in enumerate(sketched_leadframe_meshes, start=1):
+        cutter_sources.append((f"Lead Path {path_index}", path_mesh))
+    cutter_sources.extend(
+        [
+            ("Die Leadframe", die_leadframe_mesh),
+            ("Silicon Die", silicon_die_mesh),
+        ]
+    )
+    for bond_index, bond_data in enumerate(bond_assembly_meshes, start=1):
+        bond_mesh = bond_data.get("mesh")
+        if isinstance(bond_mesh, trimesh.Trimesh):
+            cutter_sources.append((f"Bond Assembly {bond_index}", bond_mesh))
+
+    expanded_cutters: list[tuple[str, trimesh.Trimesh]] = []
+    warnings: list[str] = []
+    for cutter_name, cutter_mesh in cutter_sources:
+        if cutter_mesh is None:
+            continue
+        try:
+            expanded_cutters.append((cutter_name, _expand_mesh_from_centroid(cutter_mesh, clearance_mm)))
+        except Exception as exc:
+            warnings.append(f"Failed to enlarge {cutter_name}: {exc}")
+
+    base_result = trimesh.Trimesh(vertices=body_mesh.vertices.copy(), faces=body_mesh.faces.copy(), process=False)
+    top_result = trimesh.Trimesh(vertices=top_mesh.vertices.copy(), faces=top_mesh.faces.copy(), process=False)
+    subtraction_status = {"base": {}, "top": {}}
+    if expanded_cutters:
+        base_result, base_warnings, base_status = _subtract_meshes(base_result, expanded_cutters)
+        top_result, top_warnings, top_status = _subtract_meshes(top_result, expanded_cutters)
+        warnings.extend(base_warnings)
+        warnings.extend(top_warnings)
+        subtraction_status = {"base": base_status, "top": top_status}
+
+    return {"base": base_result, "top": top_result}, warnings, subtraction_status
+
+
+def _bounds_overlap(mesh_a: trimesh.Trimesh, mesh_b: trimesh.Trimesh, tolerance_mm: float = 1e-6) -> bool:
+    min_a, max_a = mesh_a.bounds
+    min_b, max_b = mesh_b.bounds
+    overlap_x = min(max_a[0], max_b[0]) - max(min_a[0], min_b[0])
+    overlap_y = min(max_a[1], max_b[1]) - max(min_a[1], min_b[1])
+    overlap_z = min(max_a[2], max_b[2]) - max(min_a[2], min_b[2])
+    return overlap_x > tolerance_mm and overlap_y > tolerance_mm and overlap_z > tolerance_mm
+
+
+def _project_points_to_2d(points: np.ndarray, drop_axis: int) -> np.ndarray:
+    return np.delete(points, drop_axis, axis=1)
+
+
+def _orientation_2d(point_a: np.ndarray, point_b: np.ndarray, point_c: np.ndarray, epsilon: float = 1e-9) -> int:
+    value = ((point_b[0] - point_a[0]) * (point_c[1] - point_a[1])) - ((point_b[1] - point_a[1]) * (point_c[0] - point_a[0]))
+    if value > epsilon:
+        return 1
+    if value < -epsilon:
+        return -1
+    return 0
+
+
+def _on_segment_2d(point_a: np.ndarray, point_b: np.ndarray, point_c: np.ndarray, epsilon: float = 1e-9) -> bool:
+    return (
+        min(point_a[0], point_c[0]) - epsilon <= point_b[0] <= max(point_a[0], point_c[0]) + epsilon
+        and min(point_a[1], point_c[1]) - epsilon <= point_b[1] <= max(point_a[1], point_c[1]) + epsilon
+    )
+
+
+def _segments_intersect_2d(
+    start_a: np.ndarray,
+    end_a: np.ndarray,
+    start_b: np.ndarray,
+    end_b: np.ndarray,
+    epsilon: float = 1e-9,
+) -> bool:
+    orient_1 = _orientation_2d(start_a, end_a, start_b, epsilon)
+    orient_2 = _orientation_2d(start_a, end_a, end_b, epsilon)
+    orient_3 = _orientation_2d(start_b, end_b, start_a, epsilon)
+    orient_4 = _orientation_2d(start_b, end_b, end_a, epsilon)
+
+    if orient_1 != orient_2 and orient_3 != orient_4:
+        return True
+    if orient_1 == 0 and _on_segment_2d(start_a, start_b, end_a, epsilon):
+        return True
+    if orient_2 == 0 and _on_segment_2d(start_a, end_b, end_a, epsilon):
+        return True
+    if orient_3 == 0 and _on_segment_2d(start_b, start_a, end_b, epsilon):
+        return True
+    if orient_4 == 0 and _on_segment_2d(start_b, end_a, end_b, epsilon):
+        return True
+    return False
+
+
+def _point_in_triangle_2d(point: np.ndarray, triangle: np.ndarray, epsilon: float = 1e-9) -> bool:
+    orient_1 = _orientation_2d(triangle[0], triangle[1], point, epsilon)
+    orient_2 = _orientation_2d(triangle[1], triangle[2], point, epsilon)
+    orient_3 = _orientation_2d(triangle[2], triangle[0], point, epsilon)
+    has_negative = orient_1 < 0 or orient_2 < 0 or orient_3 < 0
+    has_positive = orient_1 > 0 or orient_2 > 0 or orient_3 > 0
+    return not (has_negative and has_positive)
+
+
+def _coplanar_triangles_intersect(triangle_a: np.ndarray, triangle_b: np.ndarray, normal: np.ndarray, epsilon: float = 1e-9) -> bool:
+    drop_axis = int(np.argmax(np.abs(normal)))
+    projected_a = _project_points_to_2d(triangle_a, drop_axis)
+    projected_b = _project_points_to_2d(triangle_b, drop_axis)
+    for edge_index_a in range(3):
+        start_a = projected_a[edge_index_a]
+        end_a = projected_a[(edge_index_a + 1) % 3]
+        for edge_index_b in range(3):
+            start_b = projected_b[edge_index_b]
+            end_b = projected_b[(edge_index_b + 1) % 3]
+            if _segments_intersect_2d(start_a, end_a, start_b, end_b, epsilon):
+                return True
+    return _point_in_triangle_2d(projected_a[0], projected_b, epsilon) or _point_in_triangle_2d(projected_b[0], projected_a, epsilon)
+
+
+def _segment_triangle_intersect(
+    segment_start: np.ndarray,
+    segment_end: np.ndarray,
+    triangle: np.ndarray,
+    epsilon: float = 1e-9,
+) -> bool:
+    direction = segment_end - segment_start
+    edge_1 = triangle[1] - triangle[0]
+    edge_2 = triangle[2] - triangle[0]
+    p_vec = np.cross(direction, edge_2)
+    determinant = float(np.dot(edge_1, p_vec))
+    if abs(determinant) <= epsilon:
+        return False
+    inverse_determinant = 1.0 / determinant
+    t_vec = segment_start - triangle[0]
+    u_value = float(np.dot(t_vec, p_vec)) * inverse_determinant
+    if u_value < -epsilon or u_value > 1.0 + epsilon:
+        return False
+    q_vec = np.cross(t_vec, edge_1)
+    v_value = float(np.dot(direction, q_vec)) * inverse_determinant
+    if v_value < -epsilon or (u_value + v_value) > 1.0 + epsilon:
+        return False
+    t_value = float(np.dot(edge_2, q_vec)) * inverse_determinant
+    return -epsilon <= t_value <= 1.0 + epsilon
+
+
+def _triangles_intersect(triangle_a: np.ndarray, triangle_b: np.ndarray, epsilon: float = 1e-9) -> bool:
+    normal_a = np.cross(triangle_a[1] - triangle_a[0], triangle_a[2] - triangle_a[0])
+    normal_b = np.cross(triangle_b[1] - triangle_b[0], triangle_b[2] - triangle_b[0])
+    if np.linalg.norm(normal_a) <= epsilon or np.linalg.norm(normal_b) <= epsilon:
+        return False
+
+    plane_distances_b = np.dot(triangle_b - triangle_a[0], normal_a)
+    plane_distances_a = np.dot(triangle_a - triangle_b[0], normal_b)
+    if np.all(plane_distances_b > epsilon) or np.all(plane_distances_b < -epsilon):
+        return False
+    if np.all(plane_distances_a > epsilon) or np.all(plane_distances_a < -epsilon):
+        return False
+
+    normals_cross = np.cross(normal_a, normal_b)
+    if np.linalg.norm(normals_cross) <= epsilon and np.all(np.abs(plane_distances_b) <= epsilon):
+        return _coplanar_triangles_intersect(triangle_a, triangle_b, normal_a, epsilon)
+
+    for edge_index in range(3):
+        if _segment_triangle_intersect(triangle_a[edge_index], triangle_a[(edge_index + 1) % 3], triangle_b, epsilon):
+            return True
+        if _segment_triangle_intersect(triangle_b[edge_index], triangle_b[(edge_index + 1) % 3], triangle_a, epsilon):
+            return True
+    return False
+
+
+def _triangle_bounds_overlap(bounds_a: np.ndarray, bounds_b: np.ndarray, epsilon: float = 1e-9) -> bool:
+    return not (
+        bounds_a[3] < (bounds_b[0] - epsilon)
+        or bounds_b[3] < (bounds_a[0] - epsilon)
+        or bounds_a[4] < (bounds_b[1] - epsilon)
+        or bounds_b[4] < (bounds_a[1] - epsilon)
+        or bounds_a[5] < (bounds_b[2] - epsilon)
+        or bounds_b[5] < (bounds_a[2] - epsilon)
+    )
+
+
+def _find_intersecting_face_indices(
+    mesh_a: trimesh.Trimesh,
+    mesh_b: trimesh.Trimesh,
+    stop_at_first: bool = False,
+) -> tuple[set[int], set[int]]:
+    if not _bounds_overlap(mesh_a, mesh_b):
+        return set(), set()
+
+    triangles_a = mesh_a.triangles
+    triangles_b = mesh_b.triangles
+    bounds_a = np.hstack((triangles_a.min(axis=1), triangles_a.max(axis=1)))
+    bounds_b = np.hstack((triangles_b.min(axis=1), triangles_b.max(axis=1)))
+
+    intersecting_a: set[int] = set()
+    intersecting_b: set[int] = set()
+    for index_a, triangle_a in enumerate(triangles_a):
+        candidate_mask = np.array([_triangle_bounds_overlap(bounds_a[index_a], bound_b) for bound_b in bounds_b], dtype=bool)
+        candidate_indices = np.nonzero(candidate_mask)[0]
+        for index_b in candidate_indices:
+            if _triangles_intersect(triangle_a, triangles_b[index_b]):
+                intersecting_a.add(index_a)
+                intersecting_b.add(index_b)
+                if stop_at_first:
+                    return intersecting_a, intersecting_b
+    return intersecting_a, intersecting_b
+
+
+def _mesh_from_face_indices(mesh: trimesh.Trimesh, face_indices: set[int]) -> trimesh.Trimesh | None:
+    if not face_indices:
+        return None
+    mask = np.zeros(len(mesh.faces), dtype=bool)
+    mask[list(face_indices)] = True
+    try:
+        submesh = mesh.submesh([mask], append=True, repair=False)
+    except Exception:
+        return None
+    return submesh if isinstance(submesh, trimesh.Trimesh) and len(submesh.faces) > 0 else None
+
+
+def build_intersection_report(
+    named_meshes: list[tuple[str, trimesh.Trimesh | None]],
+    subtraction_status: dict[str, dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    valid_meshes = [(name, mesh) for name, mesh in named_meshes if isinstance(mesh, trimesh.Trimesh)]
+    ignored_pairs = {
+        frozenset({"Encapsulation Base", "Encapsulation Top"}),
+    }
+    intersections: list[dict[str, str]] = []
+    for first_index in range(len(valid_meshes)):
+        first_name, first_mesh = valid_meshes[first_index]
+        for second_index in range(first_index + 1, len(valid_meshes)):
+            second_name, second_mesh = valid_meshes[second_index]
+            if frozenset({first_name, second_name}) in ignored_pairs:
+                continue
+            face_indices_a, face_indices_b = _find_intersecting_face_indices(first_mesh, second_mesh, stop_at_first=False)
+            if face_indices_a and face_indices_b:
+                extra_details: list[str] = [
+                    "method: triangle",
+                    f"faces: {len(face_indices_a)} vs {len(face_indices_b)}",
+                ]
+                if subtraction_status:
+                    if first_name == "Encapsulation Top":
+                        extra_details.append(f"top subtract {second_name}: {subtraction_status.get('top', {}).get(second_name, 'n/a')}")
+                    elif second_name == "Encapsulation Top":
+                        extra_details.append(f"top subtract {first_name}: {subtraction_status.get('top', {}).get(first_name, 'n/a')}")
+                    if first_name == "Encapsulation Base":
+                        extra_details.append(f"base subtract {second_name}: {subtraction_status.get('base', {}).get(second_name, 'n/a')}")
+                    elif second_name == "Encapsulation Base":
+                        extra_details.append(f"base subtract {first_name}: {subtraction_status.get('base', {}).get(first_name, 'n/a')}")
+                intersections.append(
+                    {
+                        "pair": f"{first_name} intersects {second_name}",
+                        "details": "; ".join(extra_details),
+                    }
+                )
+    return intersections
+
+
+def build_step16_separated_meshes(
+    payload: dict,
+    named_meshes: list[tuple[str, trimesh.Trimesh | None]],
+) -> list[tuple[str, trimesh.Trimesh | None]]:
+    return named_meshes
+
+
+def _extract_faces_inside_other(
+    source_mesh: trimesh.Trimesh,
+    other_mesh: trimesh.Trimesh,
+    tolerance_mm: float = 1e-6,
+) -> trimesh.Trimesh | None:
+    try:
+        signed = trimesh.proximity.signed_distance(other_mesh, source_mesh.triangles_center)
+    except Exception:
+        return None
+    if signed is None or len(signed) != len(source_mesh.faces):
+        return None
+    face_mask = np.asarray(signed) >= (-tolerance_mm)
+    if not np.any(face_mask):
+        return None
+    try:
+        return source_mesh.submesh([face_mask], append=True, repair=False)
+    except Exception:
+        return None
+
+
+def build_focus_intersection_meshes(
+    named_mesh_map: dict[str, trimesh.Trimesh],
+    selected_pairs: set[str],
+) -> list[dict[str, object]]:
+    focus_meshes: list[dict[str, object]] = []
+    for pair_label in selected_pairs:
+        if " intersects " not in pair_label:
+            continue
+        left_name, right_name = [item.strip() for item in pair_label.split(" intersects ", 1)]
+        left_mesh = named_mesh_map.get(left_name)
+        right_mesh = named_mesh_map.get(right_name)
+        if not isinstance(left_mesh, trimesh.Trimesh) or not isinstance(right_mesh, trimesh.Trimesh):
+            continue
+
+        left_face_indices, right_face_indices = _find_intersecting_face_indices(left_mesh, right_mesh, stop_at_first=False)
+        left_focus_mesh = _mesh_from_face_indices(left_mesh, left_face_indices)
+        right_focus_mesh = _mesh_from_face_indices(right_mesh, right_face_indices)
+        focus_parts = [
+            mesh
+            for mesh in (left_focus_mesh, right_focus_mesh)
+            if isinstance(mesh, trimesh.Trimesh) and len(mesh.faces) > 0
+        ]
+        if not focus_parts:
+            continue
+        intersection_mesh = trimesh.util.concatenate(focus_parts)
+        focus_meshes.append(
+            {
+                "pair": pair_label,
+                "mesh": intersection_mesh,
+            }
+        )
+    return focus_meshes
+
+
+def build_scene_geometry(payload: dict) -> dict:
+    current_step_index = int(payload.get("current_step_index", 0))
+    body_mesh, side_meshes = build_ic_meshes(payload)
+    combined_lead_system_mesh, sketched_leadframe_meshes = build_combined_lead_system_mesh(payload, side_meshes)
+    die_leadframe_mesh, die_info = build_die_leadframe_mesh(payload, side_meshes)
+    silicon_die_mesh, silicon_die_info = build_silicon_die_mesh(payload, die_leadframe_mesh, die_info)
+    leg_pick_markers = build_leg_pick_markers(payload, side_meshes)
+    wire_target_markers = build_leadframe_path_end_markers(payload)
+    die_regions, die_pick_marker, die_region_info = build_die_region_meshes_and_pick(payload, silicon_die_mesh, silicon_die_info)
+    ball_bond_meshes = build_ball_bond_meshes(payload, leg_pick_markers, die_regions)
+    connection_paths = build_connection_paths(payload, leg_pick_markers, die_regions, ball_bond_meshes)
+    tube_connection_meshes = build_tube_connection_meshes(payload, connection_paths)
+    integrated_terminal_meshes = build_integrated_wire_terminal_meshes(payload, connection_paths)
+    ball_bond_wire_meshes = build_ball_bond_wire_assembly_meshes(ball_bond_meshes, tube_connection_meshes)
+    ball_bond_terminal_meshes = build_ball_bond_wire_assembly_meshes(ball_bond_meshes, integrated_terminal_meshes)
+    selected_bond_assemblies = build_selected_bond_assemblies(
+        current_step_index,
+        ball_bond_meshes,
+        ball_bond_wire_meshes,
+        ball_bond_terminal_meshes,
+    )
+    encapsulation_meshes = {"base": None, "top": None}
+    encapsulation_warnings: list[str] = []
+    encapsulation_subtraction_status = {"base": {}, "top": {}}
+    if current_step_index >= 14:
+        encapsulation_meshes, encapsulation_warnings, encapsulation_subtraction_status = build_encapsulation_meshes(
+            payload,
+            body_mesh,
+            side_meshes,
+            sketched_leadframe_meshes,
+            die_leadframe_mesh,
+            silicon_die_mesh,
+            ball_bond_terminal_meshes,
+        )
+    named_intersection_meshes = [
+        ("Lead System", combined_lead_system_mesh),
+        ("Die Leadframe", die_leadframe_mesh),
+        ("Silicon Die", silicon_die_mesh),
+        (
+            "Bond Assembly",
+            trimesh.util.concatenate([item["mesh"] for item in ball_bond_terminal_meshes])
+            if ball_bond_terminal_meshes
+            else None,
+        ),
+        ("Encapsulation Base", encapsulation_meshes.get("base")),
+        ("Encapsulation Top", encapsulation_meshes.get("top")),
+    ]
+    step16_named_meshes = build_step16_separated_meshes(payload, named_intersection_meshes) if current_step_index >= 15 else named_intersection_meshes
+    intersections = build_intersection_report(step16_named_meshes, encapsulation_subtraction_status) if current_step_index >= 15 else []
+    return {
+        "current_step_index": current_step_index,
+        "body_mesh": body_mesh,
+        "side_meshes": side_meshes,
+        "combined_lead_system_mesh": combined_lead_system_mesh,
+        "sketched_leadframe_meshes": sketched_leadframe_meshes,
+        "die_leadframe_mesh": die_leadframe_mesh,
+        "die_info": die_info,
+        "silicon_die_mesh": silicon_die_mesh,
+        "silicon_die_info": silicon_die_info,
+        "leg_pick_markers": leg_pick_markers,
+        "wire_target_markers": wire_target_markers,
+        "die_regions": die_regions,
+        "die_pick_marker": die_pick_marker,
+        "die_region_info": die_region_info,
+        "ball_bond_meshes": ball_bond_meshes,
+        "connection_paths": connection_paths,
+        "tube_connection_meshes": tube_connection_meshes,
+        "integrated_terminal_meshes": integrated_terminal_meshes,
+        "ball_bond_wire_meshes": ball_bond_wire_meshes,
+        "ball_bond_terminal_meshes": ball_bond_terminal_meshes,
+        "selected_bond_assemblies": selected_bond_assemblies,
+        "encapsulation_meshes": encapsulation_meshes,
+        "encapsulation_warnings": encapsulation_warnings,
+        "encapsulation_subtraction_status": encapsulation_subtraction_status,
+        "step16_named_meshes": step16_named_meshes,
+        "intersection_pairs": intersections,
+    }
+
+
 def build_axis_meshes(payload: dict) -> list[tuple[str, trimesh.Trimesh, str]]:
     body_width_mm = max(0.0, float(payload.get("body_width_mm", 0.0)))
     body_depth_mm = max(0.0, float(payload.get("body_depth_mm", 0.0)))
@@ -1236,40 +2250,27 @@ def collect_export_meshes(payload: dict) -> list[trimesh.Trimesh]:
             meshes.append(lead_mesh)
         return meshes
 
-    body_mesh, side_meshes = build_ic_meshes(payload)
-    if current_step_index >= 3 and body_mesh is not None:
-        meshes.append(body_mesh)
+    geometry = build_scene_geometry(payload)
+    body_mesh = geometry["body_mesh"]
+    side_meshes = geometry["side_meshes"]
+    combined_lead_system_mesh = geometry["combined_lead_system_mesh"]
+    die_leadframe_mesh = geometry["die_leadframe_mesh"]
+    silicon_die_mesh = geometry["silicon_die_mesh"]
+    selected_bond_assemblies = geometry["selected_bond_assemblies"]
+    encapsulation_meshes = geometry["encapsulation_meshes"]
 
-    meshes.extend(mesh for _side_name, mesh in side_meshes)
-
-    die_leadframe_mesh, die_info = build_die_leadframe_mesh(payload, side_meshes)
+    if current_step_index >= 5 and body_mesh is not None:
+        meshes.append(encapsulation_meshes["base"] if current_step_index >= 14 and encapsulation_meshes.get("base") is not None else body_mesh)
+    if combined_lead_system_mesh is not None:
+        meshes.append(combined_lead_system_mesh)
     if current_step_index >= 5 and die_leadframe_mesh is not None:
         meshes.append(die_leadframe_mesh)
-
-    silicon_die_mesh, silicon_die_info = build_silicon_die_mesh(payload, die_leadframe_mesh, die_info)
-    if current_step_index >= 6 and silicon_die_mesh is not None:
+    if current_step_index >= 7 and silicon_die_mesh is not None:
         meshes.append(silicon_die_mesh)
-
-    leg_pick_markers = build_leg_pick_markers(payload, side_meshes)
-    die_regions, _die_pick_marker, _die_region_info = build_die_region_meshes_and_pick(payload, silicon_die_mesh, silicon_die_info)
-    ball_bond_meshes = build_ball_bond_meshes(payload, leg_pick_markers, die_regions)
-    connection_paths = build_connection_paths(payload, leg_pick_markers, die_regions, ball_bond_meshes)
-    tube_connection_meshes = build_tube_connection_meshes(payload, connection_paths)
-    integrated_terminal_meshes = build_integrated_wire_terminal_meshes(payload, connection_paths)
-    ball_bond_wire_meshes = build_ball_bond_wire_assembly_meshes(ball_bond_meshes, tube_connection_meshes)
-    ball_bond_terminal_meshes = build_ball_bond_wire_assembly_meshes(ball_bond_meshes, integrated_terminal_meshes)
-
-    if current_step_index >= 10:
-        meshes.extend(
-            item["mesh"]
-            for item in (
-                ball_bond_terminal_meshes
-                if current_step_index >= 12
-                else ball_bond_wire_meshes
-                if current_step_index >= 11
-                else ball_bond_meshes
-            )
-        )
+    if current_step_index >= 11:
+        meshes.extend(item["mesh"] for item in selected_bond_assemblies)
+    if current_step_index >= 14 and encapsulation_meshes.get("top") is not None:
+        meshes.append(encapsulation_meshes["top"])
 
     return meshes
 
@@ -1310,11 +2311,24 @@ class IcLeadViewer:
         return (
             payload.get("current_step_index", 0),
             tuple(tuple(point) for point in payload.get("profile_points_mm", [])),
+            tuple(
+                (
+                    tuple(tuple(point) for point in profile.get("points_mm", [])),
+                    bool(profile.get("closed", False)),
+                )
+                for profile in payload.get("leadframe_profiles", [])
+                if isinstance(profile, dict)
+            ),
             payload.get("leg_length_mm", 0.0),
             payload.get("lead_offset_mm", 0.0),
-            payload.get("die_leadframe_ratio_percent", 80.0),
-            payload.get("die_leadframe_clearance_mm", 0.05),
+            payload.get("die_leadframe_width_mm", 0.0),
+            payload.get("die_leadframe_depth_mm", 0.0),
             payload.get("die_leadframe_thickness_mm", 0.08),
+            payload.get("leadframe_path_width_mm", 0.3),
+            payload.get("leadframe_path_thickness_mm", 1.0),
+            payload.get("die_leadframe_center_mode", "region_centroid"),
+            payload.get("die_leadframe_center_x_mm", 0.0),
+            payload.get("die_leadframe_center_y_mm", 0.0),
             payload.get("silicon_die_width_mm", 0.0),
             payload.get("silicon_die_depth_mm", 0.0),
             payload.get("silicon_die_thickness_mm", 0.12),
@@ -1323,6 +2337,10 @@ class IcLeadViewer:
             payload.get("die_region_span_percent", 70.0),
             payload.get("die_region_depth_mm", 0.15),
             payload.get("die_region_offset_mm", 0.05),
+            payload.get("die_region_top_count", 4),
+            payload.get("die_region_bottom_count", 4),
+            payload.get("die_region_left_count", 0),
+            payload.get("die_region_right_count", 0),
             payload.get("die_pick_region", "Top"),
             payload.get("die_pick_section_index", 1),
             payload.get("die_pick_position_percent", 50.0),
@@ -1340,6 +2358,22 @@ class IcLeadViewer:
             payload.get("wedge_bond_width_mm", 0.08),
             payload.get("wedge_bond_thickness_mm", 0.02),
             payload.get("wedge_approach_run_mm", 0.18),
+            payload.get("encapsulation_height_mm", 1.6),
+            payload.get("simulation_clearance_mm", 0.001),
+            payload.get("step16_split_gap_mm", 0.01),
+            payload.get("show_step16_lead_system", True),
+            payload.get("show_step16_die_leadframe", True),
+            payload.get("show_step16_silicon_die", True),
+            payload.get("show_step16_bond_assembly", True),
+            payload.get("show_step16_encapsulation_base", True),
+            payload.get("show_step16_encapsulation_top", True),
+            payload.get("step16_lead_system_color", "#c58a34"),
+            payload.get("step16_die_leadframe_color", "#8e3f2b"),
+            payload.get("step16_silicon_die_color", "#232323"),
+            payload.get("step16_bond_assembly_color", "#2563eb"),
+            payload.get("step16_encapsulation_base_color", DEFAULT_BODY_COLOR),
+            payload.get("step16_encapsulation_top_color", "#6f7b83"),
+            tuple(str(item) for item in payload.get("selected_intersection_pairs", [])),
             payload.get("body_width_mm", 0.0),
             payload.get("body_depth_mm", 0.0),
             payload.get("body_height_mm", 0.0),
@@ -1377,66 +2411,126 @@ class IcLeadViewer:
                 else:
                     summary = "Draw a closed lead profile to preview the extrusion."
             else:
-                body_mesh, side_meshes = build_ic_meshes(payload)
+                geometry = build_scene_geometry(payload)
+                body_mesh = geometry["body_mesh"]
+                side_meshes = geometry["side_meshes"]
+                combined_lead_system_mesh = geometry["combined_lead_system_mesh"]
+                sketched_leadframe_meshes = geometry["sketched_leadframe_meshes"]
                 body_plane_mesh = build_body_plane_mesh(payload)
-                die_leadframe_mesh, die_info = build_die_leadframe_mesh(payload, side_meshes)
-                silicon_die_mesh, silicon_die_info = build_silicon_die_mesh(payload, die_leadframe_mesh, die_info)
-                leg_pick_markers = build_leg_pick_markers(payload, side_meshes)
-                die_regions, die_pick_marker, die_region_info = build_die_region_meshes_and_pick(payload, silicon_die_mesh, silicon_die_info)
-                ball_bond_meshes = build_ball_bond_meshes(payload, leg_pick_markers, die_regions)
-                connection_paths = build_connection_paths(payload, leg_pick_markers, die_regions, ball_bond_meshes)
-                tube_connection_meshes = build_tube_connection_meshes(payload, connection_paths)
-                integrated_terminal_meshes = build_integrated_wire_terminal_meshes(payload, connection_paths)
-                ball_bond_wire_meshes = build_ball_bond_wire_assembly_meshes(ball_bond_meshes, tube_connection_meshes)
-                ball_bond_terminal_meshes = build_ball_bond_wire_assembly_meshes(ball_bond_meshes, integrated_terminal_meshes)
+                die_leadframe_mesh = geometry["die_leadframe_mesh"]
+                die_info = geometry["die_info"]
+                silicon_die_mesh = geometry["silicon_die_mesh"]
+                silicon_die_info = geometry["silicon_die_info"]
+                wire_target_markers = geometry["wire_target_markers"]
+                die_regions = geometry["die_regions"]
+                die_pick_marker = geometry["die_pick_marker"]
+                die_region_info = geometry["die_region_info"]
+                ball_bond_meshes = geometry["ball_bond_meshes"]
+                connection_paths = geometry["connection_paths"]
+                ball_bond_wire_meshes = geometry["ball_bond_wire_meshes"]
+                ball_bond_terminal_meshes = geometry["ball_bond_terminal_meshes"]
+                selected_bond_assemblies = geometry["selected_bond_assemblies"]
+                encapsulation_meshes = geometry["encapsulation_meshes"]
+                encapsulation_warnings = geometry["encapsulation_warnings"]
+                step16_named_meshes = geometry["step16_named_meshes"]
+                intersection_pairs = geometry["intersection_pairs"]
+                selected_intersection_pairs = {
+                    str(item).strip()
+                    for item in payload.get("selected_intersection_pairs", [])
+                    if str(item).strip()
+                }
+                step16_visibility = {
+                    "Lead System": bool(payload.get("show_step16_lead_system", True)),
+                    "Die Leadframe": bool(payload.get("show_step16_die_leadframe", True)),
+                    "Silicon Die": bool(payload.get("show_step16_silicon_die", True)),
+                    "Bond Assembly": bool(payload.get("show_step16_bond_assembly", True)),
+                    "Encapsulation Base": bool(payload.get("show_step16_encapsulation_base", True)),
+                    "Encapsulation Top": bool(payload.get("show_step16_encapsulation_top", True)),
+                }
+                step16_colors = {
+                    "Lead System": str(payload.get("step16_lead_system_color", "#c58a34")),
+                    "Die Leadframe": str(payload.get("step16_die_leadframe_color", "#8e3f2b")),
+                    "Silicon Die": str(payload.get("step16_silicon_die_color", "#232323")),
+                    "Bond Assembly": str(payload.get("step16_bond_assembly_color", "#2563eb")),
+                    "Encapsulation Base": str(payload.get("step16_encapsulation_base_color", DEFAULT_BODY_COLOR)),
+                    "Encapsulation Top": str(payload.get("step16_encapsulation_top_color", "#6f7b83")),
+                }
+                step16_mesh_map = {name: mesh for name, mesh in step16_named_meshes if isinstance(mesh, trimesh.Trimesh)}
+                focus_intersection_meshes = build_focus_intersection_meshes(step16_mesh_map, selected_intersection_pairs) if current_step_index >= 15 else []
+                focus_only_mode = current_step_index >= 15 and bool(selected_intersection_pairs)
+                focused_component_names: set[str] = set()
+                for pair_label in selected_intersection_pairs:
+                    if " intersects " not in pair_label:
+                        continue
+                    left_name, right_name = pair_label.split(" intersects ", 1)
+                    focused_component_names.add(left_name.strip())
+                    focused_component_names.add(right_name.strip())
+                def step16_component_visible(component_name: str) -> bool:
+                    if current_step_index < 15:
+                        return True
+                    if not step16_visibility.get(component_name, True):
+                        return False
+                    return (not focused_component_names) or (component_name in focused_component_names)
                 if self.show_helper_objects:
                     for axis_name, axis_mesh, axis_color in build_axis_meshes(payload):
                         axis_actor = Mesh([axis_mesh.vertices.tolist(), axis_mesh.faces.tolist()]).c(axis_color).alpha(1.0)
                         axis_actor.info = f"{axis_name} Axis"
                         self.actors.append(axis_actor)
                         self.plotter += axis_actor
-                if self.show_helper_objects and current_step_index >= 2 and body_plane_mesh is not None:
+                if self.show_helper_objects and current_step_index >= 2 and body_plane_mesh is not None and not focus_only_mode:
                     plane_actor = Mesh([body_plane_mesh.vertices.tolist(), body_plane_mesh.faces.tolist()]).c("#d9c9ad").alpha(1.0)
                     plane_actor.info = "Body Placement Plane"
                     self.actors.append(plane_actor)
                     self.plotter += plane_actor
-                if current_step_index >= 3 and body_mesh is not None:
-                    body_actor = Mesh([body_mesh.vertices.tolist(), body_mesh.faces.tolist()]).c(DEFAULT_BODY_COLOR).alpha(1.0)
-                    body_actor.info = "Package Body"
-                    self.actors.append(body_actor)
-                    self.plotter += body_actor
-                side_colors = {
-                    "Top": "#d4af72",
-                    "Bottom": "#e0bf8f",
-                    "Left": "#c9975b",
-                    "Right": "#e7cfa7",
-                }
-                for side_name, mesh in side_meshes:
-                    actor = Mesh([mesh.vertices.tolist(), mesh.faces.tolist()]).c(side_colors.get(side_name, DEFAULT_LEAD_COLOR)).alpha(1.0)
-                    actor.info = f"{side_name} Lead"
-                    self.actors.append(actor)
-                    self.plotter += actor
-                body_status = "ready" if (current_step_index >= 3 and body_mesh is not None) else "hidden until final placement"
+                visible_body_mesh = encapsulation_meshes["base"] if current_step_index >= 14 and encapsulation_meshes.get("base") is not None else body_mesh
+                if current_step_index >= 15:
+                    visible_body_mesh = step16_mesh_map.get("Encapsulation Base", visible_body_mesh)
+                if current_step_index >= 5 and visible_body_mesh is not None and not focus_only_mode:
+                    if step16_component_visible("Encapsulation Base"):
+                        body_actor = Mesh([visible_body_mesh.vertices.tolist(), visible_body_mesh.faces.tolist()]).c(step16_colors["Encapsulation Base"] if current_step_index >= 15 else DEFAULT_BODY_COLOR).alpha(1.0)
+                        body_actor.info = "Encapsulation Base" if current_step_index >= 14 else "Package Body"
+                        self.actors.append(body_actor)
+                        self.plotter += body_actor
+                if combined_lead_system_mesh is not None and not focus_only_mode:
+                    visible_lead_system_mesh = step16_mesh_map.get("Lead System", combined_lead_system_mesh) if current_step_index >= 15 else combined_lead_system_mesh
+                    if step16_component_visible("Lead System"):
+                        lead_system_actor = Mesh([visible_lead_system_mesh.vertices.tolist(), visible_lead_system_mesh.faces.tolist()]).c(step16_colors["Lead System"] if current_step_index >= 15 else "#c58a34").alpha(1.0)
+                        lead_system_actor.info = "Lead System"
+                        self.actors.append(lead_system_actor)
+                        self.plotter += lead_system_actor
+                body_status = "ready" if (current_step_index >= 5 and body_mesh is not None) else "hidden until final placement"
                 plane_status = "xy placement plane shown" if body_plane_mesh is not None else "xy placement plane waiting"
-                if current_step_index >= 5 and die_leadframe_mesh is not None:
-                    die_actor = Mesh([die_leadframe_mesh.vertices.tolist(), die_leadframe_mesh.faces.tolist()]).c("#8e3f2b").alpha(1.0)
-                    die_actor.info = "Leadframe"
-                    self.actors.append(die_actor)
-                    self.plotter += die_actor
-                if current_step_index >= 6 and silicon_die_mesh is not None:
-                    silicon_actor = Mesh([silicon_die_mesh.vertices.tolist(), silicon_die_mesh.faces.tolist()]).c("#232323").alpha(1.0)
-                    silicon_actor.info = "Silicon Die"
-                    self.actors.append(silicon_actor)
-                    self.plotter += silicon_actor
-                if self.show_helper_objects and current_step_index >= 7:
-                    indexed_leg_markers = _clockwise_indexed_items(leg_pick_markers)
-                    for leg_index, marker_data in enumerate(indexed_leg_markers, start=1):
-                        marker_mesh = marker_data["mesh"]
+                if current_step_index >= 14 and encapsulation_meshes.get("top") is not None and not focus_only_mode:
+                    top_mesh = step16_mesh_map.get("Encapsulation Top", encapsulation_meshes["top"]) if current_step_index >= 15 else encapsulation_meshes["top"]
+                    if step16_component_visible("Encapsulation Top"):
+                        top_actor = Mesh([top_mesh.vertices.tolist(), top_mesh.faces.tolist()]).c(step16_colors["Encapsulation Top"] if current_step_index >= 15 else "#6f7b83").alpha(1.0)
+                        top_actor.info = "Encapsulation Top"
+                        self.actors.append(top_actor)
+                        self.plotter += top_actor
+                if current_step_index >= 5 and die_leadframe_mesh is not None and not focus_only_mode:
+                    visible_die_leadframe_mesh = step16_mesh_map.get("Die Leadframe", die_leadframe_mesh) if current_step_index >= 15 else die_leadframe_mesh
+                    if step16_component_visible("Die Leadframe"):
+                        die_actor = Mesh([visible_die_leadframe_mesh.vertices.tolist(), visible_die_leadframe_mesh.faces.tolist()]).c(step16_colors["Die Leadframe"] if current_step_index >= 15 else "#8e3f2b").alpha(1.0)
+                        die_actor.info = "Leadframe"
+                        self.actors.append(die_actor)
+                        self.plotter += die_actor
+                if current_step_index >= 7 and silicon_die_mesh is not None and not focus_only_mode:
+                    visible_silicon_die_mesh = step16_mesh_map.get("Silicon Die", silicon_die_mesh) if current_step_index >= 15 else silicon_die_mesh
+                    if step16_component_visible("Silicon Die"):
+                        silicon_actor = Mesh([visible_silicon_die_mesh.vertices.tolist(), visible_silicon_die_mesh.faces.tolist()]).c(step16_colors["Silicon Die"] if current_step_index >= 15 else "#232323").alpha(1.0)
+                        silicon_actor.info = "Silicon Die"
+                        self.actors.append(silicon_actor)
+                        self.plotter += silicon_actor
+                if self.show_helper_objects and current_step_index >= 8 and not focus_only_mode:
+                    for target_index, marker_data in enumerate(wire_target_markers, start=1):
+                        marker_mesh = marker_data.get("mesh")
+                        if marker_mesh is None:
+                            continue
                         marker_actor = Mesh([marker_mesh.vertices.tolist(), marker_mesh.faces.tolist()]).c("#da4f2f").alpha(1.0)
-                        marker_actor.info = f"Leg Index {leg_index}\nSide: {marker_data['side_name']}"
+                        marker_actor.info = f"Wire Target {target_index}\nSide: {marker_data['side_name']}"
                         self.actors.append(marker_actor)
                         self.plotter += marker_actor
-                if self.show_helper_objects and current_step_index >= 8:
+                if self.show_helper_objects and current_step_index >= 9 and not focus_only_mode:
                     indexed_die_regions = _clockwise_indexed_items(die_regions)
                     region_palette = [
                         "#ef4444",
@@ -1464,7 +2558,7 @@ class IcLeadViewer:
                         pick_actor.info = "Selected Die Pick Position"
                         self.actors.append(pick_actor)
                         self.plotter += pick_actor
-                if self.show_helper_objects and 9 <= current_step_index < 11:
+                if self.show_helper_objects and 10 <= current_step_index < 12 and not focus_only_mode:
                     for arc_data in connection_paths:
                         arc_actor = Line(arc_data["points"], lw=3, c="#2563eb", alpha=1.0)
                         arc_actor.info = (
@@ -1475,33 +2569,44 @@ class IcLeadViewer:
                         )
                         self.actors.append(arc_actor)
                         self.plotter += arc_actor
-                if current_step_index >= 10:
-                    assembly_source = (
-                        ball_bond_terminal_meshes
-                        if current_step_index >= 12
-                        else ball_bond_wire_meshes
-                        if current_step_index >= 11
-                        else ball_bond_meshes
-                    )
-                    assembly_label = (
-                        "Integrated Ball Bond Terminal"
-                        if current_step_index >= 12
-                        else "Ball Bond + Wire"
-                        if current_step_index >= 11
-                        else "Ball Bond"
-                    )
-                    assembly_color = "#2563eb" if current_step_index >= 11 else "#f59e0b"
-                    for assembly_data in assembly_source:
-                        assembly_mesh = assembly_data["mesh"]
-                        assembly_actor = Mesh([assembly_mesh.vertices.tolist(), assembly_mesh.faces.tolist()]).c(assembly_color).alpha(1.0)
-                        assembly_actor.info = (
-                            f"{assembly_label}\n"
-                            f"Leg Index {assembly_data.get('leg_index', assembly_data['die_index'])} -> Die Index {assembly_data['die_index']}\n"
-                            f"Leg Side: {assembly_data.get('leg_side_name', '')}\n"
-                            f"Die Side: {assembly_data.get('die_side_name', assembly_data.get('side_name', ''))} Section {assembly_data.get('die_section_index', assembly_data.get('section_index', 0))}"
+                if focus_only_mode:
+                    focus_palette = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#8b5cf6"]
+                    for focus_index, focus_data in enumerate(focus_intersection_meshes, start=1):
+                        focus_mesh = focus_data["mesh"]
+                        focus_color = focus_palette[(focus_index - 1) % len(focus_palette)]
+                        focus_actor = Mesh([focus_mesh.vertices.tolist(), focus_mesh.faces.tolist()]).c(focus_color).alpha(1.0)
+                        focus_actor.info = f"Intersection Triangles\n{focus_data['pair']}"
+                        self.actors.append(focus_actor)
+                        self.plotter += focus_actor
+                elif current_step_index >= 11:
+                    if current_step_index >= 15:
+                        if step16_component_visible("Bond Assembly") and step16_mesh_map.get("Bond Assembly") is not None:
+                            assembly_mesh = step16_mesh_map["Bond Assembly"]
+                            assembly_actor = Mesh([assembly_mesh.vertices.tolist(), assembly_mesh.faces.tolist()]).c(step16_colors["Bond Assembly"]).alpha(1.0)
+                            assembly_actor.info = "Bond Assembly"
+                            self.actors.append(assembly_actor)
+                            self.plotter += assembly_actor
+                    else:
+                        assembly_source = selected_bond_assemblies
+                        assembly_label = (
+                            "Integrated Ball Bond Terminal"
+                            if current_step_index >= 13
+                            else "Ball Bond + Wire"
+                            if current_step_index >= 12
+                            else "Ball Bond"
                         )
-                        self.actors.append(assembly_actor)
-                        self.plotter += assembly_actor
+                        assembly_color = "#2563eb" if current_step_index >= 12 else "#f59e0b"
+                        for assembly_data in assembly_source:
+                            assembly_mesh = assembly_data["mesh"]
+                            assembly_actor = Mesh([assembly_mesh.vertices.tolist(), assembly_mesh.faces.tolist()]).c(assembly_color).alpha(1.0)
+                            assembly_actor.info = (
+                                f"{assembly_label}\n"
+                                f"Leg Index {assembly_data.get('leg_index', assembly_data['die_index'])} -> Die Index {assembly_data['die_index']}\n"
+                                f"Leg Side: {assembly_data.get('leg_side_name', '')}\n"
+                                f"Die Side: {assembly_data.get('die_side_name', assembly_data.get('side_name', ''))} Section {assembly_data.get('die_section_index', assembly_data.get('section_index', 0))}"
+                            )
+                            self.actors.append(assembly_actor)
+                            self.plotter += assembly_actor
                 die_status = (
                     f"die frame {die_info.get('final_width_mm', 0.0):.2f} x {die_info.get('final_depth_mm', 0.0):.2f} mm"
                     if current_step_index >= 5 and die_leadframe_mesh is not None
@@ -1509,22 +2614,42 @@ class IcLeadViewer:
                 )
                 silicon_status = (
                     f"silicon die {silicon_die_info.get('final_width_mm', 0.0):.2f} x {silicon_die_info.get('final_depth_mm', 0.0):.2f} mm"
-                    if current_step_index >= 6 and silicon_die_mesh is not None
+                    if current_step_index >= 7 and silicon_die_mesh is not None
                     else "silicon die waiting"
                 )
-                leg_pick_status = f"leg picks {len(leg_pick_markers)}" if current_step_index >= 7 else "leg picks waiting"
+                leg_pick_status = f"wire targets {len(wire_target_markers)}" if current_step_index >= 8 and wire_target_markers else "wire targets waiting"
                 die_region_status = (
                     f"die regions {die_region_info.get('span_percent', 0.0):.0f}% span"
-                    if current_step_index >= 8 and die_regions
+                    if current_step_index >= 9 and die_regions
                     else "die regions waiting"
                 )
-                arc_status = f"arcs {len(connection_paths)}" if current_step_index >= 9 and connection_paths else "arcs waiting"
-                bond_status = f"ball bonds {len(ball_bond_meshes)}" if current_step_index >= 10 and ball_bond_meshes else "ball bonds waiting"
-                tube_status = f"bond-wire assemblies {len(ball_bond_wire_meshes)}" if current_step_index >= 11 and ball_bond_wire_meshes else "bond-wire assemblies waiting"
-                wedge_status = f"integrated terminals {len(ball_bond_terminal_meshes)}" if current_step_index >= 12 and ball_bond_terminal_meshes else "integrated terminals waiting"
+                arc_status = f"arcs {len(connection_paths)}" if current_step_index >= 10 and connection_paths else "arcs waiting"
+                bond_status = f"ball bonds {len(ball_bond_meshes)}" if current_step_index >= 11 and ball_bond_meshes else "ball bonds waiting"
+                tube_status = f"bond-wire assemblies {len(ball_bond_wire_meshes)}" if current_step_index >= 12 and ball_bond_wire_meshes else "bond-wire assemblies waiting"
+                wedge_status = f"integrated terminals {len(ball_bond_terminal_meshes)}" if current_step_index >= 13 and ball_bond_terminal_meshes else "integrated terminals waiting"
+                encapsulation_status = (
+                    f"ready ({len(encapsulation_warnings)} warning(s))"
+                    if current_step_index >= 14 and encapsulation_meshes.get("top") is not None
+                    else "waiting"
+                )
+                intersection_status = (
+                    "no intersections"
+                    if current_step_index >= 15 and not intersection_pairs
+                    else f"{len(intersection_pairs)} intersecting pair(s)"
+                    if current_step_index >= 15
+                    else "waiting"
+                )
+                focus_status = (
+                    f"{len(selected_intersection_pairs)} focus pair(s), {len(focus_intersection_meshes)} intersection mesh(es)"
+                    if current_step_index >= 15 and selected_intersection_pairs
+                    else "all visible pairs"
+                    if current_step_index >= 15
+                    else "n/a"
+                )
                 summary = (
-                    f"Leads: {len(side_meshes)}  Body: {body_status}  Plane: {plane_status}  "
-                    f"Leadframe: {die_status}  Die: {silicon_status}  Leg Picks: {leg_pick_status}  Regions: {die_region_status}  Arcs: {arc_status}  Bonds: {bond_status}  Tubes: {tube_status}  Wedges: {wedge_status}"
+                    f"Lead System: {len(side_meshes)} leads + {len(sketched_leadframe_meshes)} path mesh(es)  Body: {body_status}  Plane: {plane_status}  "
+                    f"Leadframe: {die_status}  Die: {silicon_status}  Leg Picks: {leg_pick_status}  Regions: {die_region_status}  Arcs: {arc_status}  "
+                    f"Bonds: {bond_status}  Tubes: {tube_status}  Wedges: {wedge_status}  Encapsulation: {encapsulation_status}  Step 16: {intersection_status}  Focus: {focus_status}"
                 )
         except Exception as exc:
             summary = f"Preview blocked: {exc}"
@@ -1698,8 +2823,10 @@ class IcChipGeneratorApp:
 
         self.profile = LeadProfile(points_mm=[])
         self.current_points_px: list[tuple[float, float]] = []
+        self.leadframe_profiles: list[LeadProfile] = []
+        self.leadframe_current_points_px: list[tuple[float, float]] = []
         self.preview_cursor_px: tuple[float, float] | None = None
-        self.dragging_vertex_index: int | None = None
+        self.dragging_vertex_index: int | tuple[int, int] | None = None
         self.canvas_vertex_items: dict[int, int] = {}
         self.snap_hover_axis: str | None = None
         self.snap_hover_after_id: str | None = None
@@ -1716,16 +2843,19 @@ class IcChipGeneratorApp:
             "1. Draw Lead Profile",
             "2. Extrude Lead Length",
             "3. Set Legs Per Side",
-            "4. Overall 3D Placement",
-            "5. Lead Offset",
-            "6. Die Leadframe",
-            "7. Silicon Die",
-            "8. Leg Positions",
-            "9. Die Regions",
-            "10. Bond Arcs",
-            "11. Ball Bond Formation",
-            "12. Bond Wire Tube",
-            "13. Wedge Bond Ending",
+            "4. Die Leadframe",
+            "5. Lead Frame Designing",
+            "6. Overall 3D Placement",
+            "7. Lead Offset",
+            "8. Silicon Die",
+            "9. Leg Positions",
+            "10. Die Regions",
+            "11. Bond Arcs",
+            "12. Ball Bond Formation",
+            "13. Bond Wire Tube",
+            "14. Wedge Bond Ending",
+            "15. Encapsulation",
+            "16. Intersection Check",
         ]
 
         self.leg_length_var = tk.DoubleVar(value=4.0)
@@ -1758,9 +2888,15 @@ class IcChipGeneratorApp:
         self.right_rz_var = tk.DoubleVar(value=0.0)
         self.distance_target_var = tk.DoubleVar(value=1.0)
         self.lead_offset_var = tk.DoubleVar(value=0.0)
-        self.die_leadframe_ratio_var = tk.DoubleVar(value=80.0)
-        self.die_leadframe_clearance_var = tk.DoubleVar(value=0.05)
+        self.die_leadframe_width_var = tk.DoubleVar(value=8.0)
+        self.die_leadframe_depth_var = tk.DoubleVar(value=8.0)
         self.die_leadframe_thickness_var = tk.DoubleVar(value=0.08)
+        self.leadframe_path_width_var = tk.DoubleVar(value=0.3)
+        self.leadframe_path_thickness_var = tk.DoubleVar(value=1.0)
+        self.die_leadframe_center_mode_var = tk.StringVar(value="region_centroid")
+        self.die_leadframe_center_x_var = tk.DoubleVar(value=0.0)
+        self.die_leadframe_center_y_var = tk.DoubleVar(value=0.0)
+        self.die_leadframe_pick_active = False
         self.silicon_die_width_var = tk.DoubleVar(value=2.5)
         self.silicon_die_depth_var = tk.DoubleVar(value=2.5)
         self.silicon_die_thickness_var = tk.DoubleVar(value=0.12)
@@ -1769,6 +2905,10 @@ class IcChipGeneratorApp:
         self.die_region_span_percent_var = tk.DoubleVar(value=70.0)
         self.die_region_depth_var = tk.DoubleVar(value=0.15)
         self.die_region_offset_var = tk.DoubleVar(value=0.05)
+        self.die_region_top_count_var = tk.IntVar(value=4)
+        self.die_region_bottom_count_var = tk.IntVar(value=4)
+        self.die_region_left_count_var = tk.IntVar(value=0)
+        self.die_region_right_count_var = tk.IntVar(value=0)
         self.die_pick_region_var = tk.StringVar(value="Top")
         self.die_pick_section_index_var = tk.IntVar(value=1)
         self.die_pick_position_percent_var = tk.DoubleVar(value=50.0)
@@ -1786,6 +2926,24 @@ class IcChipGeneratorApp:
         self.wedge_bond_width_var = tk.DoubleVar(value=0.08)
         self.wedge_bond_thickness_var = tk.DoubleVar(value=0.02)
         self.wedge_approach_run_var = tk.DoubleVar(value=0.18)
+        self.encapsulation_height_var = tk.DoubleVar(value=1.6)
+        self.simulation_clearance_var = tk.DoubleVar(value=0.001)
+        self.step16_split_gap_var = tk.DoubleVar(value=0.01)
+        self.show_step16_lead_system_var = tk.BooleanVar(value=True)
+        self.show_step16_die_leadframe_var = tk.BooleanVar(value=True)
+        self.show_step16_silicon_die_var = tk.BooleanVar(value=True)
+        self.show_step16_bond_assembly_var = tk.BooleanVar(value=True)
+        self.show_step16_encapsulation_base_var = tk.BooleanVar(value=True)
+        self.show_step16_encapsulation_top_var = tk.BooleanVar(value=True)
+        self.step16_lead_system_color_var = tk.StringVar(value="#c58a34")
+        self.step16_die_leadframe_color_var = tk.StringVar(value="#8e3f2b")
+        self.step16_silicon_die_color_var = tk.StringVar(value="#232323")
+        self.step16_bond_assembly_color_var = tk.StringVar(value="#2563eb")
+        self.step16_encapsulation_base_color_var = tk.StringVar(value=DEFAULT_BODY_COLOR)
+        self.step16_encapsulation_top_color_var = tk.StringVar(value="#6f7b83")
+        self.intersection_report_var = tk.StringVar(value="Step 16 will list any remaining intersecting parts.")
+        self.intersection_pair_vars: dict[str, tk.BooleanVar] = {}
+        self.intersection_pairs_container: ttk.Frame | None = None
         self.project_name_var = tk.StringVar(value="untitled_chip")
         self.status_var = tk.StringVar(value="Step 1: draw a closed 2D lead profile.")
 
@@ -1839,9 +2997,10 @@ class IcChipGeneratorApp:
         self.step_frames.append(self._build_draw_step(left))
         self.step_frames.append(self._build_length_step(left))
         self.step_frames.append(self._build_side_count_step(left))
+        self.step_frames.append(self._build_die_leadframe_step(left))
+        self.step_frames.append(self._build_leadframe_design_step(left))
         self.step_frames.append(self._build_overall_step(left))
         self.step_frames.append(self._build_lead_offset_step(left))
-        self.step_frames.append(self._build_die_leadframe_step(left))
         self.step_frames.append(self._build_silicon_die_step(left))
         self.step_frames.append(self._build_leg_positions_step(left))
         self.step_frames.append(self._build_die_regions_step(left))
@@ -1849,6 +3008,8 @@ class IcChipGeneratorApp:
         self.step_frames.append(self._build_ball_bond_step(left))
         self.step_frames.append(self._build_bond_wire_tube_step(left))
         self.step_frames.append(self._build_wedge_bond_step(left))
+        self.step_frames.append(self._build_encapsulation_step(left))
+        self.step_frames.append(self._build_intersection_check_step(left))
 
         self.canvas_title_label = ttk.Label(right, text="Lead Profile Sketch", font=("Georgia", 15, "bold"))
         self.canvas_title_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
@@ -1874,6 +3035,8 @@ class IcChipGeneratorApp:
         self.canvas.bind("<MouseWheel>", self._on_canvas_zoom)
         self.canvas.bind("<Button-4>", self._on_canvas_zoom)
         self.canvas.bind("<Button-5>", self._on_canvas_zoom)
+        self.root.bind("<Control-z>", self._on_control_undo)
+        self.root.bind("<Control-Z>", self._on_control_undo)
         self._show_step()
 
     def _bind_live_preview_vars(self) -> None:
@@ -1907,9 +3070,14 @@ class IcChipGeneratorApp:
             self.body_depth_var,
             self.body_height_var,
             self.lead_offset_var,
-            self.die_leadframe_ratio_var,
-            self.die_leadframe_clearance_var,
+            self.die_leadframe_width_var,
+            self.die_leadframe_depth_var,
             self.die_leadframe_thickness_var,
+            self.leadframe_path_width_var,
+            self.leadframe_path_thickness_var,
+            self.die_leadframe_center_mode_var,
+            self.die_leadframe_center_x_var,
+            self.die_leadframe_center_y_var,
             self.silicon_die_width_var,
             self.silicon_die_depth_var,
             self.silicon_die_thickness_var,
@@ -1918,6 +3086,10 @@ class IcChipGeneratorApp:
             self.die_region_span_percent_var,
             self.die_region_depth_var,
             self.die_region_offset_var,
+            self.die_region_top_count_var,
+            self.die_region_bottom_count_var,
+            self.die_region_left_count_var,
+            self.die_region_right_count_var,
             self.die_pick_region_var,
             self.die_pick_section_index_var,
             self.die_pick_position_percent_var,
@@ -1935,6 +3107,21 @@ class IcChipGeneratorApp:
             self.wedge_bond_width_var,
             self.wedge_bond_thickness_var,
             self.wedge_approach_run_var,
+            self.encapsulation_height_var,
+            self.simulation_clearance_var,
+            self.step16_split_gap_var,
+            self.show_step16_lead_system_var,
+            self.show_step16_die_leadframe_var,
+            self.show_step16_silicon_die_var,
+            self.show_step16_bond_assembly_var,
+            self.show_step16_encapsulation_base_var,
+            self.show_step16_encapsulation_top_var,
+            self.step16_lead_system_color_var,
+            self.step16_die_leadframe_color_var,
+            self.step16_silicon_die_color_var,
+            self.step16_bond_assembly_color_var,
+            self.step16_encapsulation_base_color_var,
+            self.step16_encapsulation_top_color_var,
         ]
         for variable in preview_vars:
             variable.trace_add("write", self._schedule_preview_refresh)
@@ -1956,6 +3143,40 @@ class IcChipGeneratorApp:
     def _project_dir_for_name(self, project_name: str) -> Path:
         slug = _safe_stage_slug(project_name)
         return PROJECTS_ROOT_DIR / slug
+
+    def _is_leadframe_canvas_context(self) -> bool:
+        return self.step_index in {3, 4}
+
+    def _is_leadframe_design_step(self) -> bool:
+        return self.step_index == 4
+
+    def _canvas_step_active(self) -> bool:
+        return self.step_index in {0, 3, 4}
+
+    def _active_profile(self) -> LeadProfile:
+        return self.profile
+
+    def _active_draft_points(self) -> list[tuple[float, float]]:
+        return self.leadframe_current_points_px if self._is_leadframe_canvas_context() else self.current_points_px
+
+    def _leadframe_shapes(self) -> list[LeadProfile]:
+        return self.leadframe_profiles
+
+    def _replace_active_profile(self, profile: LeadProfile) -> None:
+        self.profile = profile
+
+    def _clear_active_draft_points(self) -> None:
+        if self._is_leadframe_canvas_context():
+            self.leadframe_current_points_px.clear()
+        else:
+            self.current_points_px.clear()
+
+    def _canvas_step_title(self) -> str:
+        if self.step_index == 3:
+            return "Die Leadframe Placement"
+        if self._is_leadframe_canvas_context():
+            return "Lead Frame Sketch"
+        return "Lead Profile Sketch"
 
     def _project_snapshot_path(self, project_dir: Path | None = None) -> Path:
         target_dir = project_dir if project_dir is not None else self.current_project_dir
@@ -1995,7 +3216,7 @@ class IcChipGeneratorApp:
         snapshot_path = self._project_snapshot_path(project_dir)
         if not snapshot_path.exists():
             raise FileNotFoundError(f"Project snapshot not found: {snapshot_path}")
-        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
         if not isinstance(payload, dict):
             raise ValueError("Project snapshot is not a JSON object.")
 
@@ -2012,16 +3233,35 @@ class IcChipGeneratorApp:
                     if isinstance(point, list | tuple) and len(point) == 2
                 ]
             )
+            self.leadframe_profiles = _leadframe_profiles_from_payload(payload)
             self.current_points_px = [
                 tuple(point)
                 for point in payload.get("draft_points_px", [])
                 if isinstance(point, list | tuple) and len(point) == 2
             ]
+            self.leadframe_current_points_px = [
+                tuple(point)
+                for point in payload.get("leadframe_draft_points_px", [])
+                if isinstance(point, list | tuple) and len(point) == 2
+            ]
+            body_width_value = _coerce_float(payload.get("body_width_mm", 10.0), 10.0)
+            body_depth_value = _coerce_float(payload.get("body_depth_mm", 10.0), 10.0)
             self.distance_target_var.set(_coerce_float(payload.get("distance_target_mm", 1.0), 1.0))
             self.lead_offset_var.set(_coerce_float(payload.get("lead_offset_mm", 0.0), 0.0))
-            self.die_leadframe_ratio_var.set(_coerce_float(payload.get("die_leadframe_ratio_percent", 80.0), 80.0))
-            self.die_leadframe_clearance_var.set(_coerce_float(payload.get("die_leadframe_clearance_mm", 0.05), 0.05))
+            legacy_ratio_percent = _coerce_float(payload.get("die_leadframe_ratio_percent", 80.0), 80.0)
+            self.die_leadframe_width_var.set(
+                _coerce_float(payload.get("die_leadframe_width_mm", body_width_value * (legacy_ratio_percent / 100.0)), body_width_value * 0.8)
+            )
+            self.die_leadframe_depth_var.set(
+                _coerce_float(payload.get("die_leadframe_depth_mm", body_depth_value * (legacy_ratio_percent / 100.0)), body_depth_value * 0.8)
+            )
             self.die_leadframe_thickness_var.set(_coerce_float(payload.get("die_leadframe_thickness_mm", 0.08), 0.08))
+            self.leadframe_path_width_var.set(_coerce_float(payload.get("leadframe_path_width_mm", 0.3), 0.3))
+            self.leadframe_path_thickness_var.set(_coerce_float(payload.get("leadframe_path_thickness_mm", 1.0), 1.0))
+            center_mode = str(payload.get("die_leadframe_center_mode", "region_centroid")).strip().lower()
+            self.die_leadframe_center_mode_var.set(center_mode if center_mode in {"region_centroid", "custom_point"} else "region_centroid")
+            self.die_leadframe_center_x_var.set(_coerce_float(payload.get("die_leadframe_center_x_mm", 0.0), 0.0))
+            self.die_leadframe_center_y_var.set(_coerce_float(payload.get("die_leadframe_center_y_mm", 0.0), 0.0))
             self.silicon_die_width_var.set(_coerce_float(payload.get("silicon_die_width_mm", 2.5), 2.5))
             self.silicon_die_depth_var.set(_coerce_float(payload.get("silicon_die_depth_mm", 2.5), 2.5))
             self.silicon_die_thickness_var.set(_coerce_float(payload.get("silicon_die_thickness_mm", 0.12), 0.12))
@@ -2030,6 +3270,10 @@ class IcChipGeneratorApp:
             self.die_region_span_percent_var.set(_coerce_float(payload.get("die_region_span_percent", 70.0), 70.0))
             self.die_region_depth_var.set(_coerce_float(payload.get("die_region_depth_mm", 0.15), 0.15))
             self.die_region_offset_var.set(_coerce_float(payload.get("die_region_offset_mm", 0.05), 0.05))
+            self.die_region_top_count_var.set(_coerce_int(payload.get("die_region_top_count", payload.get("top_count", 4)), 4))
+            self.die_region_bottom_count_var.set(_coerce_int(payload.get("die_region_bottom_count", payload.get("bottom_count", 4)), 4))
+            self.die_region_left_count_var.set(_coerce_int(payload.get("die_region_left_count", payload.get("left_count", 0)), 0))
+            self.die_region_right_count_var.set(_coerce_int(payload.get("die_region_right_count", payload.get("right_count", 0)), 0))
             self.die_pick_region_var.set(str(payload.get("die_pick_region", "Top")).strip().title() or "Top")
             self.die_pick_section_index_var.set(_coerce_int(payload.get("die_pick_section_index", 1), 1))
             self.die_pick_position_percent_var.set(_coerce_float(payload.get("die_pick_position_percent", 50.0), 50.0))
@@ -2047,6 +3291,27 @@ class IcChipGeneratorApp:
             self.wedge_bond_width_var.set(_coerce_float(payload.get("wedge_bond_width_mm", 0.08), 0.08))
             self.wedge_bond_thickness_var.set(_coerce_float(payload.get("wedge_bond_thickness_mm", 0.02), 0.02))
             self.wedge_approach_run_var.set(_coerce_float(payload.get("wedge_approach_run_mm", 0.18), 0.18))
+            self.encapsulation_height_var.set(_coerce_float(payload.get("encapsulation_height_mm", self.body_height_var.get()), self.body_height_var.get()))
+            self.simulation_clearance_var.set(_coerce_float(payload.get("simulation_clearance_mm", 0.001), 0.001))
+            self.step16_split_gap_var.set(_coerce_float(payload.get("step16_split_gap_mm", 0.01), 0.01))
+            self.show_step16_lead_system_var.set(bool(payload.get("show_step16_lead_system", True)))
+            self.show_step16_die_leadframe_var.set(bool(payload.get("show_step16_die_leadframe", True)))
+            self.show_step16_silicon_die_var.set(bool(payload.get("show_step16_silicon_die", True)))
+            self.show_step16_bond_assembly_var.set(bool(payload.get("show_step16_bond_assembly", True)))
+            self.show_step16_encapsulation_base_var.set(bool(payload.get("show_step16_encapsulation_base", True)))
+            self.show_step16_encapsulation_top_var.set(bool(payload.get("show_step16_encapsulation_top", True)))
+            self.step16_lead_system_color_var.set(str(payload.get("step16_lead_system_color", "#c58a34")))
+            self.step16_die_leadframe_color_var.set(str(payload.get("step16_die_leadframe_color", "#8e3f2b")))
+            self.step16_silicon_die_color_var.set(str(payload.get("step16_silicon_die_color", "#232323")))
+            self.step16_bond_assembly_color_var.set(str(payload.get("step16_bond_assembly_color", "#2563eb")))
+            self.step16_encapsulation_base_color_var.set(str(payload.get("step16_encapsulation_base_color", DEFAULT_BODY_COLOR)))
+            self.step16_encapsulation_top_color_var.set(str(payload.get("step16_encapsulation_top_color", "#6f7b83")))
+            selected_intersection_pairs = [
+                str(item).strip()
+                for item in payload.get("selected_intersection_pairs", [])
+                if str(item).strip()
+            ]
+            self._refresh_intersection_pair_checkboxes([], selected_intersection_pairs)
             self.distance_pick_active = bool(payload.get("distance_pick_active", False))
             self.distance_point_indices = [
                 _coerce_int(index, -1)
@@ -2055,8 +3320,8 @@ class IcChipGeneratorApp:
             ]
 
             self.leg_length_var.set(_coerce_float(payload.get("leg_length_mm", 4.0), 4.0))
-            self.body_width_var.set(_coerce_float(payload.get("body_width_mm", 10.0), 10.0))
-            self.body_depth_var.set(_coerce_float(payload.get("body_depth_mm", 10.0), 10.0))
+            self.body_width_var.set(body_width_value)
+            self.body_depth_var.set(body_depth_value)
             self.body_height_var.set(_coerce_float(payload.get("body_height_mm", 1.6), 1.6))
 
             side_payloads = payload.get("side_settings", [])
@@ -2106,6 +3371,8 @@ class IcChipGeneratorApp:
             text="Left click adds points. Click Finish Closed Shape when the outline is complete. Drag existing handles to adjust the profile.",
             wraplength=330,
         ).pack(anchor="w")
+        ttk.Label(frame, text="Lead Frame Layer Thickness (mm)").pack(anchor="w", pady=(10, 0))
+        ttk.Entry(frame, textvariable=self.leadframe_path_thickness_var).pack(fill="x", pady=(2, 0))
         ttk.Button(frame, text="Undo Point", command=self._undo_point).pack(fill="x", pady=(10, 0))
         ttk.Button(frame, text="Finish Closed Shape", command=self._finish_closed_shape).pack(fill="x", pady=(8, 0))
         ttk.Button(frame, text="Clear Lead Profile", command=self._clear_profile).pack(fill="x", pady=(8, 0))
@@ -2199,8 +3466,24 @@ class IcChipGeneratorApp:
             ttk.Entry(row, textvariable=ry_var, width=8).pack(side="left", fill="x", expand=True, padx=6)
             ttk.Entry(row, textvariable=rz_var, width=8).pack(side="left", fill="x", expand=True)
 
+    def _build_leadframe_design_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(parent, text="Step 5: Lead Frame Designing", padding=10)
+        ttk.Label(
+            frame,
+            text="Use the 2D canvas to draw lead-frame paths. Start from the orange leg guides or snap to any point along the die leadframe square edges, then control the metal width in the XY plane here.",
+            wraplength=330,
+        ).pack(anchor="w")
+        ttk.Label(frame, text="Lead Frame Path Width In XY (mm)").pack(anchor="w", pady=(10, 0))
+        ttk.Entry(frame, textvariable=self.leadframe_path_width_var).pack(fill="x", pady=(2, 0))
+        ttk.Button(frame, text="Undo Point", command=self._undo_point).pack(fill="x", pady=(10, 0))
+        ttk.Button(frame, text="Finish Path", command=self._finish_closed_shape).pack(fill="x", pady=(8, 0))
+        ttk.Button(frame, text="Mirror Horizontal", command=self._mirror_leadframe_paths_horizontal).pack(fill="x", pady=(8, 0))
+        ttk.Button(frame, text="Mirror Vertical", command=self._mirror_leadframe_paths_vertical).pack(fill="x", pady=(8, 0))
+        ttk.Button(frame, text="Clear Lead Frame Paths", command=self._clear_profile).pack(fill="x", pady=(8, 0))
+        return frame
+
     def _build_overall_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 4: Overall 3D Placement", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 6: Overall 3D Placement", padding=10)
         ttk.Label(frame, text="Chip Body Width / Depth / Height (mm)").pack(anchor="w")
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=(4, 0))
@@ -2213,7 +3496,7 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_lead_offset_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 5: Lead Offset", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 7: Lead Offset", padding=10)
         ttk.Label(
             frame,
             text="Move the placed leads toward or away from the placement rectangle. Positive values push them outward; negative values pull them inward.",
@@ -2225,23 +3508,37 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_die_leadframe_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 6: Die Leadframe", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 4: Die Leadframe", padding=10)
         ttk.Label(
             frame,
-            text="Create a centered die leadframe rectangle on top of the black body. It starts at 80% of the body rectangle, then automatically shrinks if needed to avoid touching any legs.",
+            text="Create the die leadframe rectangle using explicit width and height. Place it either at the region centroid or at a custom 2D point picked on the canvas.",
             wraplength=330,
         ).pack(anchor="w")
-        ttk.Label(frame, text="Leadframe Size (%)").pack(anchor="w", pady=(10, 0))
-        ttk.Entry(frame, textvariable=self.die_leadframe_ratio_var).pack(fill="x", pady=(2, 0))
-        ttk.Label(frame, text="Distance Away From Leg (mm)").pack(anchor="w", pady=(10, 0))
-        ttk.Entry(frame, textvariable=self.die_leadframe_clearance_var).pack(fill="x", pady=(2, 0))
+        ttk.Label(frame, text="Leadframe Width / Height (mm)").pack(anchor="w", pady=(10, 0))
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=(4, 0))
+        ttk.Entry(row, textvariable=self.die_leadframe_width_var, width=8).pack(side="left", fill="x", expand=True)
+        ttk.Entry(row, textvariable=self.die_leadframe_depth_var, width=8).pack(side="left", fill="x", expand=True, padx=6)
         ttk.Label(frame, text="Frame Thickness (mm)").pack(anchor="w", pady=(10, 0))
         ttk.Entry(frame, textvariable=self.die_leadframe_thickness_var).pack(fill="x", pady=(2, 0))
+        ttk.Label(frame, text="Center Mode").pack(anchor="w", pady=(10, 0))
+        ttk.Combobox(
+            frame,
+            textvariable=self.die_leadframe_center_mode_var,
+            values=("region_centroid", "custom_point"),
+            state="readonly",
+        ).pack(fill="x", pady=(2, 0))
+        ttk.Button(frame, text="Pick Custom Point On Canvas", command=self._toggle_die_leadframe_pick_mode).pack(fill="x", pady=(10, 0))
+        ttk.Label(frame, text="Custom Center X / Y (mm)").pack(anchor="w", pady=(10, 0))
+        center_row = ttk.Frame(frame)
+        center_row.pack(fill="x", pady=(4, 0))
+        ttk.Entry(center_row, textvariable=self.die_leadframe_center_x_var, width=8).pack(side="left", fill="x", expand=True)
+        ttk.Entry(center_row, textvariable=self.die_leadframe_center_y_var, width=8).pack(side="left", fill="x", expand=True, padx=6)
         ttk.Button(frame, text="Update Preview Data", command=lambda: self._push_payload(launch_if_missing=True)).pack(fill="x", pady=(10, 0))
         return frame
 
     def _build_silicon_die_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 7: Silicon Die", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 8: Silicon Die", padding=10)
         ttk.Label(
             frame,
             text="Place a centered silicon die on top of the leadframe. You control its width, depth, and thickness; the tool keeps it centered for you.",
@@ -2257,7 +3554,7 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_leg_positions_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 8: Leg Positions", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 9: Leg Positions", padding=10)
         ttk.Label(
             frame,
             text="Choose the 3D position on every leg from the inner touching end. The preview shows a flat square pick pad on each leg instead of a 3D block.",
@@ -2271,10 +3568,10 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_die_regions_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 9: Die Regions", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 10: Die Regions", padding=10)
         ttk.Label(
             frame,
-            text="Build 2D edge regions on the silicon die. Each visible side is divided by that side's leg count, hidden when the side has no legs, and offset inward from the die edge.",
+            text="Build 2D edge regions on the silicon die. Set how many regions each side should have, hide a side by setting it to 0, and offset the bands inward from the die edge.",
             wraplength=330,
         ).pack(anchor="w")
         ttk.Label(frame, text="Region Span Percent").pack(anchor="w", pady=(10, 0))
@@ -2283,6 +3580,16 @@ class IcChipGeneratorApp:
         ttk.Entry(frame, textvariable=self.die_region_depth_var).pack(fill="x", pady=(2, 0))
         ttk.Label(frame, text="Region Offset From Die Edge (mm)").pack(anchor="w", pady=(10, 0))
         ttk.Entry(frame, textvariable=self.die_region_offset_var).pack(fill="x", pady=(2, 0))
+        count_box = ttk.LabelFrame(frame, text="Regions Per Side", padding=8)
+        count_box.pack(fill="x", pady=(10, 0))
+        ttk.Label(count_box, text="Top").pack(anchor="w")
+        ttk.Entry(count_box, textvariable=self.die_region_top_count_var).pack(fill="x", pady=(2, 6))
+        ttk.Label(count_box, text="Bottom").pack(anchor="w")
+        ttk.Entry(count_box, textvariable=self.die_region_bottom_count_var).pack(fill="x", pady=(2, 6))
+        ttk.Label(count_box, text="Left").pack(anchor="w")
+        ttk.Entry(count_box, textvariable=self.die_region_left_count_var).pack(fill="x", pady=(2, 6))
+        ttk.Label(count_box, text="Right").pack(anchor="w")
+        ttk.Entry(count_box, textvariable=self.die_region_right_count_var).pack(fill="x", pady=(2, 0))
         ttk.Label(frame, text="Pick Region").pack(anchor="w", pady=(10, 0))
         ttk.Combobox(frame, textvariable=self.die_pick_region_var, values=("Top", "Bottom", "Left", "Right"), state="readonly").pack(fill="x", pady=(2, 0))
         ttk.Label(frame, text="Pick Section Index").pack(anchor="w", pady=(10, 0))
@@ -2295,7 +3602,7 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_bond_arcs_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 10: Bond Arcs", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 11: Bond Arcs", padding=10)
         ttk.Label(
             frame,
             text="Create indexed connections from the leg pick pads to the die regions. For now the tool pairs them automatically as leg index 1 to die index 1, leg index 2 to die index 2, and so on.",
@@ -2311,7 +3618,7 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_ball_bond_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 11: Ball Bond Formation", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 12: Ball Bond Formation", padding=10)
         ttk.Label(
             frame,
             text="Build a revolved ball-bond solid from a rectangle with a semicircle attached to one end. The sharp rectangle side becomes the revolve axis, producing the 3D bond form on each indexed die anchor.",
@@ -2327,7 +3634,7 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_bond_wire_tube_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 12: Bond Wire Tube", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 13: Bond Wire Tube", padding=10)
         ttk.Label(
             frame,
             text="Wrap a circular tube around the bond path. The tube begins at the ball bond, rises upward first in Z, then follows the indexed curve down to each leg.",
@@ -2345,7 +3652,7 @@ class IcChipGeneratorApp:
         return frame
 
     def _build_wedge_bond_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Step 13: Wedge Bond Ending", padding=10)
+        frame = ttk.LabelFrame(parent, text="Step 14: Wedge Bond Ending", padding=10)
         ttk.Label(
             frame,
             text="Create a flattened oval wedge bond at the leg end. The wire is brought down earlier so the final approach runs almost parallel to the XY plane before it transitions into the pressed wedge shape.",
@@ -2363,6 +3670,71 @@ class IcChipGeneratorApp:
         ttk.Button(frame, text="Export Combined STL", command=self._export_combined_stl).pack(fill="x", pady=(8, 0))
         return frame
 
+    def _build_encapsulation_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(parent, text="Step 15: Encapsulation", padding=10)
+        ttk.Label(
+            frame,
+            text="Create a top encapsulation cuboid using the same width and depth as the step 6 base. For simulation, the tool enlarges the internal parts, subtracts them from the base and top, and previews the resulting non-intersecting package solids.",
+            wraplength=330,
+        ).pack(anchor="w")
+        ttk.Label(frame, text="Top Encapsulation Height (mm)").pack(anchor="w", pady=(10, 0))
+        ttk.Entry(frame, textvariable=self.encapsulation_height_var).pack(fill="x", pady=(2, 0))
+        ttk.Label(frame, text="Simulation Clearance / Enlargement (mm)").pack(anchor="w", pady=(10, 0))
+        ttk.Entry(frame, textvariable=self.simulation_clearance_var).pack(fill="x", pady=(2, 0))
+        ttk.Button(frame, text="Update Preview Data", command=lambda: self._push_payload(launch_if_missing=True)).pack(fill="x", pady=(10, 0))
+        return frame
+
+    def _build_intersection_check_step(self, parent: ttk.Frame) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(parent, text="Step 16: Intersection Check", padding=10)
+        ttk.Label(
+            frame,
+            text="Check the simulation-ready solids for remaining triangle intersections after the encapsulation subtraction. Any intersecting part pairs will be listed below.",
+            wraplength=330,
+        ).pack(anchor="w")
+        visibility_box = ttk.LabelFrame(frame, text="Visible Components", padding=8)
+        visibility_box.pack(fill="x", pady=(10, 0))
+        ttk.Checkbutton(visibility_box, text="Lead System", variable=self.show_step16_lead_system_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Die Leadframe", variable=self.show_step16_die_leadframe_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Silicon Die", variable=self.show_step16_silicon_die_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Bond Assembly", variable=self.show_step16_bond_assembly_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Encapsulation Base", variable=self.show_step16_encapsulation_base_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Encapsulation Top", variable=self.show_step16_encapsulation_top_var).pack(anchor="w")
+        color_box = ttk.LabelFrame(frame, text="Part Colors", padding=8)
+        color_box.pack(fill="x", pady=(10, 0))
+        self._build_step16_color_row(color_box, "Lead System", self.step16_lead_system_color_var)
+        self._build_step16_color_row(color_box, "Die Leadframe", self.step16_die_leadframe_color_var)
+        self._build_step16_color_row(color_box, "Silicon Die", self.step16_silicon_die_color_var)
+        self._build_step16_color_row(color_box, "Bond Assembly", self.step16_bond_assembly_color_var)
+        self._build_step16_color_row(color_box, "Encapsulation Base", self.step16_encapsulation_base_color_var)
+        self._build_step16_color_row(color_box, "Encapsulation Top", self.step16_encapsulation_top_color_var)
+        pair_box = ttk.LabelFrame(frame, text="Focus Intersections", padding=8)
+        pair_box.pack(fill="x", pady=(10, 0))
+        self.intersection_pairs_container = ttk.Frame(pair_box)
+        self.intersection_pairs_container.pack(fill="x")
+        ttk.Label(self.intersection_pairs_container, text="Refresh step 16 to list selectable pairs.", wraplength=300, justify="left").pack(anchor="w")
+        ttk.Label(frame, textvariable=self.intersection_report_var, wraplength=330, justify="left").pack(anchor="w", pady=(10, 0))
+        ttk.Button(frame, text="Refresh Intersection Report", command=lambda: self._push_payload(launch_if_missing=True)).pack(fill="x", pady=(10, 0))
+        ttk.Button(frame, text="Export Combined STL", command=self._export_combined_stl).pack(fill="x", pady=(8, 0))
+        return frame
+
+    def _build_step16_color_row(self, parent: ttk.Frame, label_text: str, variable: tk.StringVar) -> None:
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(0, 4))
+        ttk.Label(row, text=label_text).pack(side="left")
+        ttk.Button(
+            row,
+            text="Choose...",
+            command=lambda var=variable, title=label_text: self._choose_step16_color(var, title),
+        ).pack(side="right")
+
+    def _choose_step16_color(self, variable: tk.StringVar, title: str) -> None:
+        initial_color = variable.get().strip() or "#ffffff"
+        _rgb, hex_color = colorchooser.askcolor(color=initial_color, title=f"Choose {title} Color", parent=self.root)
+        if not hex_color:
+            return
+        variable.set(hex_color)
+        self._push_payload(launch_if_missing=True)
+
     def _show_step(self) -> None:
         self.step_label.configure(text=self.step_titles[self.step_index])
         for index, frame in enumerate(self.step_frames):
@@ -2370,12 +3742,40 @@ class IcChipGeneratorApp:
                 frame.pack(fill="x", pady=(0, 12))
             else:
                 frame.pack_forget()
-        if self.step_index == 0:
+        if self._canvas_step_active():
+            self.canvas_title_label.configure(text=self._canvas_step_title())
             self.canvas_title_label.grid()
             self.canvas.grid()
         else:
             self.canvas_title_label.grid_remove()
             self.canvas.grid_remove()
+
+    def _selected_intersection_pairs(self) -> list[str]:
+        return [pair_label for pair_label, variable in self.intersection_pair_vars.items() if bool(variable.get())]
+
+    def _refresh_intersection_pair_checkboxes(self, intersections: list[dict[str, str]], selected_pairs: list[str] | None = None) -> None:
+        if self.intersection_pairs_container is None:
+            return
+        selected_set = set(selected_pairs or self._selected_intersection_pairs())
+        for child in self.intersection_pairs_container.winfo_children():
+            child.destroy()
+        self.intersection_pair_vars.clear()
+        if not intersections:
+            ttk.Label(
+                self.intersection_pairs_container,
+                text="No intersecting pairs are currently available for focus.",
+                wraplength=300,
+                justify="left",
+            ).pack(anchor="w")
+            return
+        for item in intersections:
+            pair_label = str(item.get("pair", "")).strip()
+            if not pair_label:
+                continue
+            variable = tk.BooleanVar(value=pair_label in selected_set)
+            variable.trace_add("write", self._schedule_preview_refresh)
+            self.intersection_pair_vars[pair_label] = variable
+            ttk.Checkbutton(self.intersection_pairs_container, text=pair_label, variable=variable).pack(anchor="w")
 
     def _previous_step(self) -> None:
         self.step_index = max(0, self.step_index - 1)
@@ -2383,9 +3783,14 @@ class IcChipGeneratorApp:
         self.status_var.set(f"{self.step_titles[self.step_index]} active.")
 
     def _next_step(self) -> None:
+        trim_message = ""
+        if self.step_index == 4:
+            trimmed_count = self._sanitize_leadframe_paths_against_keepout()
+            if trimmed_count > 0:
+                trim_message = f" Trimmed {trimmed_count} path(s) against the center keep-out."
         self.step_index = min(len(self.step_titles) - 1, self.step_index + 1)
         self._show_step()
-        self.status_var.set(f"{self.step_titles[self.step_index]} active.")
+        self.status_var.set(f"{self.step_titles[self.step_index]} active.{trim_message}")
         if self.step_index >= 1:
             self._push_payload(launch_if_missing=True)
 
@@ -2459,7 +3864,628 @@ class IcChipGeneratorApp:
             justify="center",
         )
 
-    def _find_vertex_hit(self, event_x: float, event_y: float) -> int | None:
+    def _leadframe_contact_guide_data(self) -> list[dict[str, object]]:
+        body_width_mm = max(0.5, float(self.body_width_var.get()))
+        body_depth_mm = max(0.5, float(self.body_depth_var.get()))
+        guide_half_length_mm = max(0.12, min(body_width_mm, body_depth_mm) * 0.035)
+        region_half_thickness_mm = max(0.08, guide_half_length_mm * 0.55)
+        guide_data: list[dict[str, object]] = []
+        rows = [
+            ("Top", self.top_count_var.get(), self.top_pitch_var.get()),
+            ("Bottom", self.bottom_count_var.get(), self.bottom_pitch_var.get()),
+            ("Left", self.left_count_var.get(), self.left_pitch_var.get()),
+            ("Right", self.right_count_var.get(), self.right_pitch_var.get()),
+        ]
+        for side_name, count, pitch_mm in rows:
+            count = max(0, int(count))
+            pitch_mm = float(pitch_mm)
+            if count <= 0 or pitch_mm <= 0.0:
+                continue
+            spread = (count - 1) * pitch_mm
+            for index in range(count):
+                position = (index * pitch_mm) - (spread / 2.0)
+                if side_name == "Top":
+                    center_mm = (position, body_depth_mm / 2.0)
+                    start_mm = (center_mm[0] - guide_half_length_mm, center_mm[1])
+                    end_mm = (center_mm[0] + guide_half_length_mm, center_mm[1])
+                    region_points_mm = [
+                        (start_mm[0], center_mm[1] - region_half_thickness_mm),
+                        (end_mm[0], center_mm[1] - region_half_thickness_mm),
+                        (end_mm[0], center_mm[1] + region_half_thickness_mm),
+                        (start_mm[0], center_mm[1] + region_half_thickness_mm),
+                    ]
+                elif side_name == "Bottom":
+                    center_mm = (position, -body_depth_mm / 2.0)
+                    start_mm = (center_mm[0] - guide_half_length_mm, center_mm[1])
+                    end_mm = (center_mm[0] + guide_half_length_mm, center_mm[1])
+                    region_points_mm = [
+                        (start_mm[0], center_mm[1] - region_half_thickness_mm),
+                        (end_mm[0], center_mm[1] - region_half_thickness_mm),
+                        (end_mm[0], center_mm[1] + region_half_thickness_mm),
+                        (start_mm[0], center_mm[1] + region_half_thickness_mm),
+                    ]
+                elif side_name == "Left":
+                    center_mm = (-body_width_mm / 2.0, position)
+                    start_mm = (center_mm[0], center_mm[1] - guide_half_length_mm)
+                    end_mm = (center_mm[0], center_mm[1] + guide_half_length_mm)
+                    region_points_mm = [
+                        (center_mm[0] - region_half_thickness_mm, start_mm[1]),
+                        (center_mm[0] + region_half_thickness_mm, start_mm[1]),
+                        (center_mm[0] + region_half_thickness_mm, end_mm[1]),
+                        (center_mm[0] - region_half_thickness_mm, end_mm[1]),
+                    ]
+                else:
+                    center_mm = (body_width_mm / 2.0, position)
+                    start_mm = (center_mm[0], center_mm[1] - guide_half_length_mm)
+                    end_mm = (center_mm[0], center_mm[1] + guide_half_length_mm)
+                    region_points_mm = [
+                        (center_mm[0] - region_half_thickness_mm, start_mm[1]),
+                        (center_mm[0] + region_half_thickness_mm, start_mm[1]),
+                        (center_mm[0] + region_half_thickness_mm, end_mm[1]),
+                        (center_mm[0] - region_half_thickness_mm, end_mm[1]),
+                    ]
+                guide_data.append(
+                    {
+                        "side_name": side_name,
+                        "index": index + 1,
+                        "orientation": "horizontal" if side_name in {"Top", "Bottom"} else "vertical",
+                        "start_mm": start_mm,
+                        "end_mm": end_mm,
+                        "center_mm": center_mm,
+                        "region_points_mm": region_points_mm,
+                    }
+                )
+        return guide_data
+
+    def _die_leadframe_corner_points_mm(self) -> list[tuple[float, float]]:
+        try:
+            payload = self._project_payload()
+            _body_mesh, side_meshes = build_ic_meshes(payload)
+            die_leadframe_mesh, _die_info = build_die_leadframe_mesh(payload, side_meshes)
+        except Exception:
+            return []
+        if die_leadframe_mesh is None:
+            return []
+        min_corner = die_leadframe_mesh.bounds[0].tolist()
+        max_corner = die_leadframe_mesh.bounds[1].tolist()
+        return [
+            (min_corner[0], min_corner[1]),
+            (min_corner[0], max_corner[1]),
+            (max_corner[0], max_corner[1]),
+            (max_corner[0], min_corner[1]),
+        ]
+
+    def _die_leadframe_keepout_corners_mm(self) -> list[tuple[float, float]]:
+        die_corners_mm = self._die_leadframe_corner_points_mm()
+        if len(die_corners_mm) != 4:
+            return []
+        min_x = min(point[0] for point in die_corners_mm)
+        max_x = max(point[0] for point in die_corners_mm)
+        min_y = min(point[1] for point in die_corners_mm)
+        max_y = max(point[1] for point in die_corners_mm)
+        center_x = (min_x + max_x) / 2.0
+        center_y = (min_y + max_y) / 2.0
+        half_width = ((max_x - min_x) * LEADFRAME_KEEPOUT_SCALE) / 2.0
+        half_height = ((max_y - min_y) * LEADFRAME_KEEPOUT_SCALE) / 2.0
+        return [
+            (center_x - half_width, center_y - half_height),
+            (center_x - half_width, center_y + half_height),
+            (center_x + half_width, center_y + half_height),
+            (center_x + half_width, center_y - half_height),
+        ]
+
+    def _leadframe_reference_anchors(self) -> list[dict[str, object]]:
+        anchors: list[dict[str, object]] = []
+        for guide in self._leadframe_contact_guide_data():
+            anchors.append(
+                {
+                    "kind": "leg_guide_center",
+                    "side_name": guide["side_name"],
+                    "index": guide["index"],
+                    "role": "center",
+                    "point_mm": tuple(guide["center_mm"]),
+                }
+            )
+            anchors.append(
+                {
+                    "kind": "leg_guide",
+                    "side_name": guide["side_name"],
+                    "index": guide["index"],
+                    "role": "start",
+                    "point_mm": tuple(guide["start_mm"]),
+                }
+            )
+            anchors.append(
+                {
+                    "kind": "leg_guide",
+                    "side_name": guide["side_name"],
+                    "index": guide["index"],
+                    "role": "end",
+                    "point_mm": tuple(guide["end_mm"]),
+                }
+            )
+        for corner_index, point_mm in enumerate(self._die_leadframe_corner_points_mm(), start=1):
+            anchors.append(
+                {
+                    "kind": "die_corner",
+                    "corner_index": corner_index,
+                    "role": "corner",
+                    "point_mm": point_mm,
+                }
+            )
+        return anchors
+
+    def _closest_point_on_segment_mm(
+        self,
+        point_mm: tuple[float, float],
+        start_mm: tuple[float, float],
+        end_mm: tuple[float, float],
+    ) -> tuple[float, float]:
+        segment_dx = end_mm[0] - start_mm[0]
+        segment_dy = end_mm[1] - start_mm[1]
+        segment_length_sq = (segment_dx * segment_dx) + (segment_dy * segment_dy)
+        if segment_length_sq <= 1e-12:
+            return start_mm
+        t_value = (
+            ((point_mm[0] - start_mm[0]) * segment_dx) + ((point_mm[1] - start_mm[1]) * segment_dy)
+        ) / segment_length_sq
+        clamped_t = max(0.0, min(1.0, t_value))
+        return (
+            start_mm[0] + (segment_dx * clamped_t),
+            start_mm[1] + (segment_dy * clamped_t),
+        )
+
+    def _find_die_leadframe_edge_hit(self, event_x: float, event_y: float) -> dict[str, object] | None:
+        die_corners_mm = self._die_leadframe_corner_points_mm()
+        if len(die_corners_mm) != 4:
+            return None
+        point_mm = self._canvas_to_world((event_x, event_y))
+        threshold_px = 8.0
+        closest_hit: dict[str, object] | None = None
+        closest_distance_px = float("inf")
+        edge_pairs = [
+            (die_corners_mm[0], die_corners_mm[1], "left"),
+            (die_corners_mm[1], die_corners_mm[2], "top"),
+            (die_corners_mm[2], die_corners_mm[3], "right"),
+            (die_corners_mm[3], die_corners_mm[0], "bottom"),
+        ]
+        for start_mm, end_mm, edge_name in edge_pairs:
+            closest_point_mm = self._closest_point_on_segment_mm(point_mm, start_mm, end_mm)
+            closest_point_px = self._world_to_canvas(closest_point_mm)
+            distance_px = math.dist(closest_point_px, (event_x, event_y))
+            if distance_px <= threshold_px and distance_px < closest_distance_px:
+                closest_distance_px = distance_px
+                closest_hit = {
+                    "kind": "die_edge",
+                    "edge_name": edge_name,
+                    "role": "edge_point",
+                    "point_mm": closest_point_mm,
+                    "edge_start_mm": start_mm,
+                    "edge_end_mm": end_mm,
+                }
+        return closest_hit
+
+    def _ray_segment_intersection_mm(
+        self,
+        ray_start_mm: tuple[float, float],
+        ray_direction_mm: tuple[float, float],
+        segment_start_mm: tuple[float, float],
+        segment_end_mm: tuple[float, float],
+    ) -> tuple[float, float] | None:
+        rx, ry = ray_direction_mm
+        sx = segment_end_mm[0] - segment_start_mm[0]
+        sy = segment_end_mm[1] - segment_start_mm[1]
+        denominator = (rx * sy) - (ry * sx)
+        if abs(denominator) <= 1e-12:
+            return None
+        dx = segment_start_mm[0] - ray_start_mm[0]
+        dy = segment_start_mm[1] - ray_start_mm[1]
+        ray_t = ((dx * sy) - (dy * sx)) / denominator
+        segment_t = ((dx * ry) - (dy * rx)) / denominator
+        if ray_t < 0.0 or segment_t < 0.0 or segment_t > 1.0:
+            return None
+        return (
+            ray_start_mm[0] + (ray_t * rx),
+            ray_start_mm[1] + (ray_t * ry),
+        )
+
+    def _point_inside_axis_aligned_box(
+        self,
+        point_mm: tuple[float, float],
+        box_corners_mm: list[tuple[float, float]],
+    ) -> bool:
+        if len(box_corners_mm) != 4:
+            return False
+        min_x = min(point[0] for point in box_corners_mm)
+        max_x = max(point[0] for point in box_corners_mm)
+        min_y = min(point[1] for point in box_corners_mm)
+        max_y = max(point[1] for point in box_corners_mm)
+        return min_x <= point_mm[0] <= max_x and min_y <= point_mm[1] <= max_y
+
+    def _segment_box_intersections_mm(
+        self,
+        start_mm: tuple[float, float],
+        end_mm: tuple[float, float],
+        box_corners_mm: list[tuple[float, float]],
+    ) -> list[tuple[float, tuple[float, float]]]:
+        if len(box_corners_mm) != 4:
+            return []
+        min_x = min(point[0] for point in box_corners_mm)
+        max_x = max(point[0] for point in box_corners_mm)
+        min_y = min(point[1] for point in box_corners_mm)
+        max_y = max(point[1] for point in box_corners_mm)
+        dx = end_mm[0] - start_mm[0]
+        dy = end_mm[1] - start_mm[1]
+        candidates: list[tuple[float, tuple[float, float]]] = []
+        if abs(dx) > 1e-12:
+            for edge_x in (min_x, max_x):
+                t_value = (edge_x - start_mm[0]) / dx
+                if 0.0 <= t_value <= 1.0:
+                    y_value = start_mm[1] + (t_value * dy)
+                    if min_y - 1e-9 <= y_value <= max_y + 1e-9:
+                        candidates.append((t_value, (edge_x, y_value)))
+        if abs(dy) > 1e-12:
+            for edge_y in (min_y, max_y):
+                t_value = (edge_y - start_mm[1]) / dy
+                if 0.0 <= t_value <= 1.0:
+                    x_value = start_mm[0] + (t_value * dx)
+                    if min_x - 1e-9 <= x_value <= max_x + 1e-9:
+                        candidates.append((t_value, (x_value, edge_y)))
+        deduped: list[tuple[float, tuple[float, float]]] = []
+        for t_value, point_mm in sorted(candidates, key=lambda item: item[0]):
+            if not deduped or math.dist(point_mm, deduped[-1][1]) > 1e-8:
+                deduped.append((t_value, point_mm))
+        return deduped
+
+    def _trim_path_against_keepout(
+        self,
+        path_points_mm: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        keepout_corners_mm = self._die_leadframe_keepout_corners_mm()
+        if len(keepout_corners_mm) != 4 or len(path_points_mm) < 2:
+            return path_points_mm
+        if self._point_inside_axis_aligned_box(path_points_mm[0], keepout_corners_mm):
+            return []
+        trimmed_points: list[tuple[float, float]] = [path_points_mm[0]]
+        for start_mm, end_mm in zip(path_points_mm[:-1], path_points_mm[1:]):
+            start_inside = self._point_inside_axis_aligned_box(start_mm, keepout_corners_mm)
+            end_inside = self._point_inside_axis_aligned_box(end_mm, keepout_corners_mm)
+            intersections = self._segment_box_intersections_mm(start_mm, end_mm, keepout_corners_mm)
+            if not start_inside and not end_inside and not intersections:
+                trimmed_points.append(end_mm)
+                continue
+            if not start_inside and (end_inside or intersections):
+                if intersections:
+                    trimmed_points.append(intersections[0][1])
+                return _simplify_path_points(trimmed_points)
+            if start_inside:
+                return _simplify_path_points(trimmed_points)
+        return _simplify_path_points(trimmed_points)
+
+    def _sanitize_leadframe_paths_against_keepout(self) -> int:
+        sanitized_profiles: list[LeadProfile] = []
+        trimmed_count = 0
+        for profile in self.leadframe_profiles:
+            if profile.closed:
+                sanitized_profiles.append(profile)
+                continue
+            trimmed_points_mm = self._trim_path_against_keepout(profile.points_mm)
+            if len(trimmed_points_mm) >= 2:
+                if trimmed_points_mm != profile.points_mm:
+                    trimmed_count += 1
+                sanitized_profiles.append(LeadProfile(points_mm=trimmed_points_mm, closed=False))
+            else:
+                trimmed_count += 1
+        self.leadframe_profiles = sanitized_profiles
+        return trimmed_count
+
+    def _angled_path_snap_to_die_edge(
+        self,
+        anchor_px: tuple[float, float],
+        cursor_px: tuple[float, float],
+        edge_hit: dict[str, object],
+    ) -> tuple[float, float] | None:
+        snapped_path = self._snapped_cursor_for_45_degree_path(anchor_px, cursor_px)
+        if snapped_path is None:
+            return None
+        anchor_mm = self._canvas_to_world(anchor_px)
+        snapped_target_mm = self._canvas_to_world(snapped_path[0])
+        direction_mm = (
+            snapped_target_mm[0] - anchor_mm[0],
+            snapped_target_mm[1] - anchor_mm[1],
+        )
+        if math.hypot(direction_mm[0], direction_mm[1]) <= 1e-9:
+            return None
+        edge_start_mm = tuple(edge_hit["edge_start_mm"])
+        edge_end_mm = tuple(edge_hit["edge_end_mm"])
+        intersection_mm = self._ray_segment_intersection_mm(anchor_mm, direction_mm, edge_start_mm, edge_end_mm)
+        if intersection_mm is None:
+            return None
+        return self._world_to_canvas(intersection_mm)
+
+    def _distance_point_to_die_leadframe_edge_mm(self, point_mm: tuple[float, float]) -> float | None:
+        die_corners_mm = self._die_leadframe_corner_points_mm()
+        if len(die_corners_mm) != 4:
+            return None
+        edge_pairs = [
+            (die_corners_mm[0], die_corners_mm[1]),
+            (die_corners_mm[1], die_corners_mm[2]),
+            (die_corners_mm[2], die_corners_mm[3]),
+            (die_corners_mm[3], die_corners_mm[0]),
+        ]
+        distances_mm: list[float] = []
+        for start_mm, end_mm in edge_pairs:
+            closest_point_mm = self._closest_point_on_segment_mm(point_mm, start_mm, end_mm)
+            distances_mm.append(math.dist(point_mm, closest_point_mm))
+        return min(distances_mm) if distances_mm else None
+
+    def _die_leadframe_box_center_mm(self) -> tuple[float, float] | None:
+        die_corners_mm = self._die_leadframe_corner_points_mm()
+        if len(die_corners_mm) != 4:
+            return None
+        min_x = min(point[0] for point in die_corners_mm)
+        max_x = max(point[0] for point in die_corners_mm)
+        min_y = min(point[1] for point in die_corners_mm)
+        max_y = max(point[1] for point in die_corners_mm)
+        return ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
+
+    def _leadframe_path_endpoints_valid(self, path_points_mm: list[tuple[float, float]]) -> tuple[bool, str]:
+        if len(path_points_mm) < 2:
+            return False, "Path needs at least 2 points."
+        threshold_mm = LEADFRAME_MIRROR_VALIDATION_THRESHOLD_PX / max(self.scale_px_per_mm, 1e-9)
+        start_point_mm = path_points_mm[0]
+        end_point_mm = path_points_mm[-1]
+
+        start_anchors_mm = [
+            tuple(anchor["point_mm"])
+            for anchor in self._leadframe_reference_anchors()
+            if anchor.get("kind") == "leg_guide_center"
+        ]
+        if not start_anchors_mm:
+            return False, "No orange start markers are available for validation."
+        start_distance_mm = min(math.dist(start_point_mm, anchor_point_mm) for anchor_point_mm in start_anchors_mm)
+        if start_distance_mm > threshold_mm:
+            return False, f"Mirrored start point is too far from an orange start marker ({start_distance_mm:.3f} mm)."
+
+        end_distance_mm = self._distance_point_to_die_leadframe_edge_mm(end_point_mm)
+        if end_distance_mm is None:
+            return False, "Die leadframe square is not available for end-point validation."
+        if end_distance_mm > threshold_mm:
+            return False, f"Mirrored end point is too far from the die leadframe edge ({end_distance_mm:.3f} mm)."
+        return True, ""
+
+    def _mirror_leadframe_paths(self, axis_name: str) -> None:
+        open_profiles = [profile for profile in self.leadframe_profiles if not profile.closed]
+        if not open_profiles:
+            self.status_var.set("No saved open lead frame paths are available to mirror.")
+            return
+        center_mm = self._die_leadframe_box_center_mm()
+        if center_mm is None:
+            self.status_var.set("Die leadframe square is not available for mirroring.")
+            return
+        mirrored_profiles: list[LeadProfile] = []
+        for profile_index, source_profile in enumerate(open_profiles, start=1):
+            mirrored_points_mm: list[tuple[float, float]] = []
+            for point_x_mm, point_y_mm in source_profile.points_mm:
+                if axis_name == "horizontal":
+                    mirrored_points_mm.append((point_x_mm, (2.0 * center_mm[1]) - point_y_mm))
+                else:
+                    mirrored_points_mm.append((((2.0 * center_mm[0]) - point_x_mm), point_y_mm))
+            is_valid, message = self._leadframe_path_endpoints_valid(mirrored_points_mm)
+            if not is_valid:
+                self.status_var.set(f"Mirror {axis_name} blocked on path {profile_index}: {message}")
+                self._redraw_canvas()
+                return
+            mirrored_profiles.append(LeadProfile(points_mm=mirrored_points_mm, closed=False))
+        self.leadframe_profiles.extend(mirrored_profiles)
+        self.status_var.set(f"Mirrored {len(mirrored_profiles)} lead frame path(s) across the {axis_name} axis.")
+        self._redraw_canvas()
+        self._push_payload(launch_if_missing=True)
+
+    def _mirror_leadframe_paths_horizontal(self) -> None:
+        self._mirror_leadframe_paths("horizontal")
+
+    def _mirror_leadframe_paths_vertical(self) -> None:
+        self._mirror_leadframe_paths("vertical")
+
+    def _die_leadframe_region_centroid_mm(self) -> tuple[float, float]:
+        return _combined_leadframe_centroid([profile.points_mm for profile in self.leadframe_profiles])
+
+    def _find_leadframe_anchor_hit(self, event_x: float, event_y: float) -> dict[str, object] | None:
+        threshold_px = 8.0
+        closest_anchor: dict[str, object] | None = None
+        closest_distance_px = float("inf")
+        for anchor in self._leadframe_reference_anchors():
+            point_px = self._world_to_canvas(tuple(anchor["point_mm"]))
+            distance_px = math.dist(point_px, (event_x, event_y))
+            if distance_px <= threshold_px and distance_px < closest_distance_px:
+                closest_anchor = anchor
+                closest_distance_px = distance_px
+        if closest_anchor is not None:
+            return closest_anchor
+        return None
+
+    def _toggle_die_leadframe_pick_mode(self) -> None:
+        self.die_leadframe_center_mode_var.set("custom_point")
+        self.die_leadframe_pick_active = not self.die_leadframe_pick_active
+        if self.die_leadframe_pick_active:
+            self.status_var.set("Die leadframe custom-point pick is ON. Click the Step 4 canvas to place the center.")
+        else:
+            self.status_var.set("Die leadframe custom-point pick is OFF.")
+        self._redraw_canvas()
+
+    def _draw_leadframe_design_guide(self) -> None:
+        if self.step_index not in {3, 4}:
+            return
+        body_width_mm = max(0.5, float(self.body_width_var.get()))
+        body_depth_mm = max(0.5, float(self.body_depth_var.get()))
+        left_top = self._world_to_canvas((-body_width_mm / 2.0, body_depth_mm / 2.0))
+        right_bottom = self._world_to_canvas((body_width_mm / 2.0, -body_depth_mm / 2.0))
+        self.canvas.create_rectangle(
+            left_top[0],
+            left_top[1],
+            right_bottom[0],
+            right_bottom[1],
+            fill="#241f1c",
+            outline="#3a3028",
+            width=2,
+        )
+
+        die_corners_mm = self._die_leadframe_corner_points_mm()
+        if len(die_corners_mm) == 4:
+            flat_corner_points: list[float] = []
+            for point_mm in die_corners_mm:
+                point_px = self._world_to_canvas(point_mm)
+                flat_corner_points.extend([point_px[0], point_px[1]])
+            self.canvas.create_polygon(
+                *flat_corner_points,
+                outline="#b91c1c",
+                width=2,
+                dash=(6, 4),
+                fill="",
+            )
+            for corner_index, point_mm in enumerate(die_corners_mm, start=1):
+                point_px = self._world_to_canvas(point_mm)
+                self.canvas.create_oval(
+                    point_px[0] - 5,
+                    point_px[1] - 5,
+                    point_px[0] + 5,
+                    point_px[1] + 5,
+                    fill="#b91c1c",
+                    outline="",
+                )
+                self.canvas.create_text(
+                    point_px[0] + 14,
+                    point_px[1] - 12,
+                    text=f"C{corner_index}",
+                    fill="#7f1d1d",
+                    font=("Segoe UI", 9, "bold"),
+                )
+
+        keepout_corners_mm = self._die_leadframe_keepout_corners_mm()
+        if len(keepout_corners_mm) == 4:
+            keepout_flat_points: list[float] = []
+            for point_mm in keepout_corners_mm:
+                point_px = self._world_to_canvas(point_mm)
+                keepout_flat_points.extend([point_px[0], point_px[1]])
+            self.canvas.create_polygon(
+                *keepout_flat_points,
+                outline="#ef4444",
+                width=2,
+                dash=(3, 3),
+                fill="",
+            )
+            keepout_center_px = self._world_to_canvas((
+                sum(point[0] for point in keepout_corners_mm) / 4.0,
+                sum(point[1] for point in keepout_corners_mm) / 4.0,
+            ))
+            self.canvas.create_text(
+                keepout_center_px[0],
+                keepout_center_px[1] - 18,
+                text="Keep-Out +10%",
+                fill="#ef4444",
+                font=("Segoe UI", 8, "bold"),
+            )
+
+        region_center_mm = self._die_leadframe_region_centroid_mm()
+        region_center_px = self._world_to_canvas(region_center_mm)
+        self.canvas.create_oval(
+            region_center_px[0] - 5,
+            region_center_px[1] - 5,
+            region_center_px[0] + 5,
+            region_center_px[1] + 5,
+            fill="#15803d",
+            outline="",
+        )
+        self.canvas.create_text(
+            region_center_px[0] + 16,
+            region_center_px[1] - 12,
+            text="Centroid",
+            fill="#166534",
+            font=("Segoe UI", 9, "bold"),
+        )
+
+        custom_center_mm = (float(self.die_leadframe_center_x_var.get()), float(self.die_leadframe_center_y_var.get()))
+        custom_center_px = self._world_to_canvas(custom_center_mm)
+        custom_color = "#2563eb" if self.die_leadframe_center_mode_var.get() == "custom_point" else "#60a5fa"
+        self.canvas.create_line(custom_center_px[0] - 8, custom_center_px[1], custom_center_px[0] + 8, custom_center_px[1], fill=custom_color, width=2)
+        self.canvas.create_line(custom_center_px[0], custom_center_px[1] - 8, custom_center_px[0], custom_center_px[1] + 8, fill=custom_color, width=2)
+        self.canvas.create_text(
+            custom_center_px[0] + 18,
+            custom_center_px[1] + 14,
+            text="Custom",
+            fill=custom_color,
+            font=("Segoe UI", 9, "bold"),
+        )
+
+        guide_color = "#ff8a2a"
+        for guide in self._leadframe_contact_guide_data():
+            region_flat_points: list[float] = []
+            for point_mm in guide["region_points_mm"]:
+                point_px = self._world_to_canvas(tuple(point_mm))
+                region_flat_points.extend([point_px[0], point_px[1]])
+            self.canvas.create_polygon(
+                *region_flat_points,
+                fill="#f59e0b",
+                outline="#f59e0b",
+                stipple="gray25",
+                width=1,
+            )
+            start_px = self._world_to_canvas(tuple(guide["start_mm"]))
+            end_px = self._world_to_canvas(tuple(guide["end_mm"]))
+            center_px = self._world_to_canvas(tuple(guide["center_mm"]))
+            self.canvas.create_line(
+                start_px[0],
+                start_px[1],
+                end_px[0],
+                end_px[1],
+                fill=guide_color,
+                width=6,
+                capstyle="round",
+            )
+            for point_px in (start_px, end_px):
+                self.canvas.create_oval(
+                    point_px[0] - 4,
+                    point_px[1] - 4,
+                    point_px[0] + 4,
+                    point_px[1] + 4,
+                    fill=guide_color,
+                    outline="",
+                )
+            self.canvas.create_oval(
+                center_px[0] - 5,
+                center_px[1] - 5,
+                center_px[0] + 5,
+                center_px[1] + 5,
+                fill="#fde68a",
+                outline="#f97316",
+                width=2,
+            )
+            label_x = (start_px[0] + end_px[0]) / 2.0
+            label_y = (start_px[1] + end_px[1]) / 2.0
+            self.canvas.create_text(
+                label_x + 16,
+                label_y,
+                text=f"{str(guide['side_name'])[0]}{guide['index']}",
+                fill="#fed7aa",
+                font=("Segoe UI", 8, "bold"),
+            )
+            self.canvas.create_text(
+                center_px[0] + 14,
+                center_px[1] + 12,
+                text="Start",
+                fill="#fde68a",
+                font=("Segoe UI", 8, "bold"),
+            )
+
+    def _find_vertex_hit(self, event_x: float, event_y: float) -> int | tuple[int, int] | None:
+        if self._is_leadframe_canvas_context():
+            for shape_index, profile in enumerate(self.leadframe_profiles):
+                for point_index, point in enumerate(profile.points_mm):
+                    px, py = self._world_to_canvas(point)
+                    if abs(px - event_x) <= 7 and abs(py - event_y) <= 7:
+                        return (shape_index, point_index)
+            return None
         for index, point in enumerate(self.profile.points_mm):
             px, py = self._world_to_canvas(point)
             if abs(px - event_x) <= 7 and abs(py - event_y) <= 7:
@@ -2509,28 +4535,65 @@ class IcChipGeneratorApp:
         self.status_var.set(f"90-degree snap locked on {axis_label} after hover.")
         self._redraw_canvas()
 
+    def _snapped_cursor_for_45_degree_path(
+        self,
+        anchor_px: tuple[float, float],
+        cursor_px: tuple[float, float],
+    ) -> tuple[tuple[float, float], float] | None:
+        dx = cursor_px[0] - anchor_px[0]
+        dy = cursor_px[1] - anchor_px[1]
+        radial_distance_px = math.hypot(dx, dy)
+        if radial_distance_px <= 1e-9:
+            return None
+        angle_deg = math.degrees(math.atan2(dy, dx))
+        snapped_angle_deg = round(angle_deg / 45.0) * 45.0
+        angle_delta_deg = abs(((angle_deg - snapped_angle_deg) + 180.0) % 360.0 - 180.0)
+        if angle_delta_deg > PATH_ANGLE_SNAP_THRESHOLD_DEG:
+            return None
+        snapped_angle_rad = math.radians(snapped_angle_deg)
+        return (
+            (
+                anchor_px[0] + (math.cos(snapped_angle_rad) * radial_distance_px),
+                anchor_px[1] + (math.sin(snapped_angle_rad) * radial_distance_px),
+            ),
+            snapped_angle_deg,
+        )
+
     def _snap_dragged_point_to_other_vertices(
         self,
         candidate_mm: tuple[float, float],
-        dragged_index: int,
+        dragged_index: int | tuple[int, int],
     ) -> tuple[float, float]:
         threshold_mm = POINT_AXIS_SNAP_THRESHOLD_PX / max(self.scale_px_per_mm, 1e-9)
         best_x: float | None = None
         best_y: float | None = None
         best_x_delta = float("inf")
         best_y_delta = float("inf")
-
-        for index, point_mm in enumerate(self.profile.points_mm):
-            if index == dragged_index:
-                continue
-            delta_x = abs(point_mm[0] - candidate_mm[0])
-            delta_y = abs(point_mm[1] - candidate_mm[1])
-            if delta_x <= threshold_mm and delta_x < best_x_delta:
-                best_x = point_mm[0]
-                best_x_delta = delta_x
-            if delta_y <= threshold_mm and delta_y < best_y_delta:
-                best_y = point_mm[1]
-                best_y_delta = delta_y
+        if self._is_leadframe_canvas_context():
+            for shape_index, profile in enumerate(self.leadframe_profiles):
+                for point_index, point_mm in enumerate(profile.points_mm):
+                    if dragged_index == (shape_index, point_index):
+                        continue
+                    delta_x = abs(point_mm[0] - candidate_mm[0])
+                    delta_y = abs(point_mm[1] - candidate_mm[1])
+                    if delta_x <= threshold_mm and delta_x < best_x_delta:
+                        best_x = point_mm[0]
+                        best_x_delta = delta_x
+                    if delta_y <= threshold_mm and delta_y < best_y_delta:
+                        best_y = point_mm[1]
+                        best_y_delta = delta_y
+        else:
+            for index, point_mm in enumerate(self.profile.points_mm):
+                if index == dragged_index:
+                    continue
+                delta_x = abs(point_mm[0] - candidate_mm[0])
+                delta_y = abs(point_mm[1] - candidate_mm[1])
+                if delta_x <= threshold_mm and delta_x < best_x_delta:
+                    best_x = point_mm[0]
+                    best_x_delta = delta_x
+                if delta_y <= threshold_mm and delta_y < best_y_delta:
+                    best_y = point_mm[1]
+                    best_y_delta = delta_y
 
         self.drag_snap_x_mm = best_x
         self.drag_snap_y_mm = best_y
@@ -2539,8 +4602,27 @@ class IcChipGeneratorApp:
         return (snapped_x, snapped_y)
 
     def _on_canvas_left_click(self, event) -> None:
+        if not self._canvas_step_active():
+            return
+        if self.step_index == 3:
+            if self.die_leadframe_pick_active:
+                picked_point_mm = self._canvas_to_world((event.x, event.y))
+                self.die_leadframe_center_x_var.set(picked_point_mm[0])
+                self.die_leadframe_center_y_var.set(picked_point_mm[1])
+                self.die_leadframe_center_mode_var.set("custom_point")
+                self.die_leadframe_pick_active = False
+                self.status_var.set(
+                    f"Die leadframe custom center set to ({picked_point_mm[0]:.3f}, {picked_point_mm[1]:.3f}) mm."
+                )
+                self._redraw_canvas()
+                self._push_payload(launch_if_missing=True)
+                return
+            self.status_var.set("Die leadframe reference view active. Move to Step 5 to sketch the lead frame.")
+            return
+        active_profile = self._active_profile()
+        active_draft = self._active_draft_points()
         hit_index = self._find_vertex_hit(event.x, event.y)
-        if self.distance_pick_active:
+        if not self._is_leadframe_design_step() and self.distance_pick_active:
             if hit_index is None:
                 self.status_var.set("Distance pick mode is active. Click a saved profile point.")
                 return
@@ -2551,8 +4633,8 @@ class IcChipGeneratorApp:
                 self.distance_point_indices = []
             self.distance_point_indices.append(hit_index)
             if len(self.distance_point_indices) == 2:
-                point_a = self.profile.points_mm[self.distance_point_indices[0]]
-                point_b = self.profile.points_mm[self.distance_point_indices[1]]
+                point_a = active_profile.points_mm[self.distance_point_indices[0]]
+                point_b = active_profile.points_mm[self.distance_point_indices[1]]
                 current_distance = math.dist(point_a, point_b)
                 self.status_var.set(
                     f"Distance points selected: {self.distance_point_indices[0] + 1} and {self.distance_point_indices[1] + 1}. "
@@ -2565,21 +4647,62 @@ class IcChipGeneratorApp:
         if hit_index is not None:
             self.dragging_vertex_index = hit_index
             return
-        point_px = (event.x, event.y)
-        if self.snapped_preview_cursor_px is not None and self.current_points_px:
+        anchor_hit = None
+        if self._is_leadframe_design_step():
+            anchor_hit = self._find_leadframe_anchor_hit(event.x, event.y)
+            if anchor_hit is None:
+                anchor_hit = self._find_die_leadframe_edge_hit(event.x, event.y)
+        anchor_point_mm = tuple(anchor_hit["point_mm"]) if anchor_hit is not None else None
+        point_px = self._world_to_canvas(anchor_point_mm) if anchor_point_mm is not None else (event.x, event.y)
+        if (
+            anchor_hit is not None
+            and anchor_hit.get("kind") == "die_edge"
+            and active_draft
+        ):
+            angled_edge_snap_px = self._angled_path_snap_to_die_edge(active_draft[-1], (event.x, event.y), anchor_hit)
+            if angled_edge_snap_px is not None:
+                point_px = angled_edge_snap_px
+        elif anchor_point_mm is None and self.snapped_preview_cursor_px is not None:
             point_px = self.snapped_preview_cursor_px
-        self.current_points_px.append(point_px)
+        active_draft.append(point_px)
         self._clear_snap_state()
-        self.status_var.set(f"Draft points: {len(self.current_points_px)}. Finish the outline when ready.")
+        if anchor_hit is not None and anchor_hit.get("kind") == "leg_guide_center":
+            self.status_var.set(
+                f"Snapped to {anchor_hit['side_name']} leg {anchor_hit['index']} center start point. Draft points: {len(active_draft)}."
+            )
+        elif anchor_hit is not None and anchor_hit.get("kind") == "leg_guide":
+            self.status_var.set(
+                f"Snapped to {anchor_hit['side_name']} leg {anchor_hit['index']} {anchor_hit['role']} point. Draft points: {len(active_draft)}."
+            )
+        elif anchor_hit is not None and anchor_hit.get("kind") == "die_edge":
+            self.status_var.set(
+                f"Snapped to die leadframe {anchor_hit['edge_name']} edge. Draft points: {len(active_draft)}."
+            )
+        elif anchor_hit is not None:
+            self.status_var.set(f"Lead frame anchor selected. Draft points: {len(active_draft)}.")
+        else:
+            self.status_var.set(f"Draft points: {len(active_draft)}. Finish the outline when ready.")
         self._redraw_canvas()
 
     def _on_canvas_drag_motion(self, event) -> None:
         if self.dragging_vertex_index is None:
             return
-        if 0 <= self.dragging_vertex_index < len(self.profile.points_mm):
+        if self._is_leadframe_canvas_context():
+            if not isinstance(self.dragging_vertex_index, tuple):
+                return
+            shape_index, point_index = self.dragging_vertex_index
+            if 0 <= shape_index < len(self.leadframe_profiles) and 0 <= point_index < len(self.leadframe_profiles[shape_index].points_mm):
+                candidate_mm = self._canvas_to_world((event.x, event.y))
+                snapped_mm = self._snap_dragged_point_to_other_vertices(candidate_mm, self.dragging_vertex_index)
+                self.leadframe_profiles[shape_index].points_mm[point_index] = snapped_mm
+                self._redraw_canvas()
+                self._push_payload()
+            return
+        active_profile = self._active_profile()
+        if isinstance(self.dragging_vertex_index, int) and 0 <= self.dragging_vertex_index < len(active_profile.points_mm):
             candidate_mm = self._canvas_to_world((event.x, event.y))
             snapped_mm = self._snap_dragged_point_to_other_vertices(candidate_mm, self.dragging_vertex_index)
-            self.profile.points_mm[self.dragging_vertex_index] = snapped_mm
+            active_profile.points_mm[self.dragging_vertex_index] = snapped_mm
             self._redraw_canvas()
             self._push_payload()
 
@@ -2607,34 +4730,69 @@ class IcChipGeneratorApp:
 
     def _on_canvas_motion(self, event) -> None:
         self.preview_cursor_px = (event.x, event.y)
-        if not self.current_points_px or self.dragging_vertex_index is not None or self.is_panning_canvas:
+        if self.step_index == 3:
+            self._clear_snap_state()
+            self._redraw_canvas()
+            return
+        active_draft = self._active_draft_points()
+        anchor_hit = None
+        if self._is_leadframe_design_step():
+            anchor_hit = self._find_leadframe_anchor_hit(event.x, event.y)
+            if anchor_hit is None:
+                anchor_hit = self._find_die_leadframe_edge_hit(event.x, event.y)
+        if anchor_hit is not None:
+            self._clear_snap_state(keep_lock=True)
+            if anchor_hit.get("kind") == "die_edge" and active_draft:
+                angled_edge_snap_px = self._angled_path_snap_to_die_edge(active_draft[-1], self.preview_cursor_px, anchor_hit)
+                self.snapped_preview_cursor_px = (
+                    angled_edge_snap_px
+                    if angled_edge_snap_px is not None
+                    else self._world_to_canvas(tuple(anchor_hit["point_mm"]))
+                )
+            else:
+                self.snapped_preview_cursor_px = self._world_to_canvas(tuple(anchor_hit["point_mm"]))
+            self._redraw_canvas()
+            return
+        if self.dragging_vertex_index is not None or self.is_panning_canvas:
+            self._clear_snap_state()
+            self._redraw_canvas()
+            return
+        if not active_draft:
             self._clear_snap_state()
             self._redraw_canvas()
             return
 
-        anchor_px = self.current_points_px[-1]
-        axis_name = self._orthogonal_axis_for_cursor(anchor_px, self.preview_cursor_px)
-        if axis_name is None:
-            self._clear_snap_state()
-        else:
-            if self.snap_locked_axis == axis_name and self.snap_anchor_px == anchor_px:
-                self.snapped_preview_cursor_px = self._snapped_cursor_for_axis(anchor_px, self.preview_cursor_px, axis_name)
-            elif self.snap_locked_axis is not None and self.snap_locked_axis != axis_name:
+        anchor_px = active_draft[-1]
+        if self._is_leadframe_design_step():
+            snapped_path = self._snapped_cursor_for_45_degree_path(anchor_px, self.preview_cursor_px)
+            if snapped_path is None:
                 self._clear_snap_state()
-                self.snap_hover_axis = axis_name
-                self.snap_anchor_px = anchor_px
-                self.snap_hover_after_id = self.root.after(
-                    SNAP_HOVER_DELAY_MS,
-                    lambda: self._activate_hover_snap(axis_name, anchor_px),
-                )
-            elif self.snap_hover_axis != axis_name or self.snap_anchor_px != anchor_px or self.snap_hover_after_id is None:
-                self._cancel_hover_snap_timer()
-                self.snap_hover_axis = axis_name
-                self.snap_anchor_px = anchor_px
-                self.snap_hover_after_id = self.root.after(
-                    SNAP_HOVER_DELAY_MS,
-                    lambda: self._activate_hover_snap(axis_name, anchor_px),
-                )
+            else:
+                self._clear_snap_state(keep_lock=True)
+                self.snapped_preview_cursor_px = snapped_path[0]
+        else:
+            axis_name = self._orthogonal_axis_for_cursor(anchor_px, self.preview_cursor_px)
+            if axis_name is None:
+                self._clear_snap_state()
+            else:
+                if self.snap_locked_axis == axis_name and self.snap_anchor_px == anchor_px:
+                    self.snapped_preview_cursor_px = self._snapped_cursor_for_axis(anchor_px, self.preview_cursor_px, axis_name)
+                elif self.snap_locked_axis is not None and self.snap_locked_axis != axis_name:
+                    self._clear_snap_state()
+                    self.snap_hover_axis = axis_name
+                    self.snap_anchor_px = anchor_px
+                    self.snap_hover_after_id = self.root.after(
+                        SNAP_HOVER_DELAY_MS,
+                        lambda: self._activate_hover_snap(axis_name, anchor_px),
+                    )
+                elif self.snap_hover_axis != axis_name or self.snap_anchor_px != anchor_px or self.snap_hover_after_id is None:
+                    self._cancel_hover_snap_timer()
+                    self.snap_hover_axis = axis_name
+                    self.snap_anchor_px = anchor_px
+                    self.snap_hover_after_id = self.root.after(
+                        SNAP_HOVER_DELAY_MS,
+                        lambda: self._activate_hover_snap(axis_name, anchor_px),
+                    )
         self._redraw_canvas()
 
     def _on_canvas_zoom(self, event) -> None:
@@ -2651,25 +4809,64 @@ class IcChipGeneratorApp:
         self.scale_px_per_mm = min(200.0, max(4.0, self.scale_px_per_mm * factor))
         self._redraw_canvas()
 
+    def _on_control_undo(self, _event=None):
+        if not self._canvas_step_active():
+            return None
+        self._undo_point()
+        return "break"
+
     def _undo_point(self) -> None:
-        if self.current_points_px:
-            self.current_points_px.pop()
+        if self.step_index == 3:
+            self.status_var.set("Die leadframe reference view active. Sketch edits happen in Step 5.")
+            return
+        active_draft = self._active_draft_points()
+        if active_draft:
+            active_draft.pop()
             self._clear_snap_state()
-            self.status_var.set(f"Draft points: {len(self.current_points_px)}.")
+            self.status_var.set(f"Draft points: {len(active_draft)}.")
             self._redraw_canvas()
             return
-        if self.profile.points_mm:
-            self.profile.points_mm.pop()
-            self.distance_point_indices = [index for index in self.distance_point_indices if index < len(self.profile.points_mm)]
-            self.status_var.set("Removed last saved profile point.")
+        if self._is_leadframe_canvas_context():
+            if self.leadframe_profiles:
+                self.leadframe_profiles.pop()
+                self.status_var.set("Removed last saved lead frame shape.")
+                self._redraw_canvas()
+                self._push_payload()
+            return
+        active_profile = self._active_profile()
+        if active_profile.points_mm:
+            active_profile.points_mm.pop()
+            if not self._is_leadframe_canvas_context():
+                self.distance_point_indices = [index for index in self.distance_point_indices if index < len(active_profile.points_mm)]
+            self.status_var.set("Removed last saved sketch point.")
             self._redraw_canvas()
             self._push_payload()
 
     def _finish_closed_shape(self) -> None:
-        if len(self.current_points_px) < 3:
-            messagebox.showerror("Shape Incomplete", "Draw at least 3 points before closing the lead profile.", parent=self.root)
+        if self.step_index == 3:
+            self.status_var.set("Die leadframe reference view active. Sketch edits happen in Step 5.")
             return
-        points_mm = [self._canvas_to_world(point_px) for point_px in self.current_points_px]
+        active_draft = self._active_draft_points()
+        if self._is_leadframe_canvas_context():
+            if len(active_draft) < 2:
+                messagebox.showerror("Path Incomplete", "Draw at least 2 points before finishing the path.", parent=self.root)
+                return
+            path_points_mm = [self._canvas_to_world(point_px) for point_px in active_draft]
+            simplified_path = _simplify_path_points(path_points_mm)
+            if len(simplified_path) < 2:
+                messagebox.showerror("Invalid Path", "The path needs at least 2 unique points.", parent=self.root)
+                return
+            self.leadframe_profiles.append(LeadProfile(points_mm=simplified_path, closed=False))
+            self._clear_active_draft_points()
+            self._clear_snap_state()
+            self.status_var.set("Lead frame path saved.")
+            self._redraw_canvas()
+            self._push_payload()
+            return
+        if len(active_draft) < 3:
+            messagebox.showerror("Shape Incomplete", "Draw at least 3 points before closing the shape.", parent=self.root)
+            return
+        points_mm = [self._canvas_to_world(point_px) for point_px in active_draft]
         try:
             simplified = _simplify_profile_points(points_mm)
             if len(simplified) < 3:
@@ -2680,8 +4877,8 @@ class IcChipGeneratorApp:
         except Exception as exc:
             messagebox.showerror("Invalid Shape", str(exc), parent=self.root)
             return
-        self.profile = LeadProfile(points_mm=simplified, closed=True)
-        self.current_points_px.clear()
+        self._replace_active_profile(LeadProfile(points_mm=simplified, closed=True))
+        self._clear_active_draft_points()
         self._clear_snap_state()
         self.distance_pick_active = False
         self.distance_point_indices.clear()
@@ -2690,14 +4887,23 @@ class IcChipGeneratorApp:
         self._push_payload()
 
     def _clear_profile(self) -> None:
-        self.profile = LeadProfile(points_mm=[])
-        self.current_points_px.clear()
+        if self.step_index == 3:
+            self.status_var.set("Die leadframe reference view active. Sketch edits happen in Step 5.")
+            return
+        if self._is_leadframe_canvas_context():
+            self.leadframe_profiles.clear()
+        else:
+            self._replace_active_profile(LeadProfile(points_mm=[]))
+        self._clear_active_draft_points()
         self._clear_snap_state()
         self.drag_snap_x_mm = None
         self.drag_snap_y_mm = None
-        self.distance_pick_active = False
-        self.distance_point_indices.clear()
-        self.status_var.set("Lead profile cleared.")
+        if not self._is_leadframe_canvas_context():
+            self.distance_pick_active = False
+            self.distance_point_indices.clear()
+            self.status_var.set("Lead profile cleared.")
+        else:
+            self.status_var.set("Lead frame sketch cleared.")
         self._redraw_canvas()
         self._push_payload()
 
@@ -2753,32 +4959,64 @@ class IcChipGeneratorApp:
         self._push_payload()
 
     def _draw_saved_profile(self) -> None:
-        if len(self.profile.points_mm) < 2:
-            return
-        flat_points: list[float] = []
-        for point_mm in self.profile.points_mm:
-            x_px, y_px = self._world_to_canvas(point_mm)
-            flat_points.extend([x_px, y_px])
-        self.canvas.create_polygon(
-            *flat_points,
-            fill="#d9c4a1",
-            outline="#6f5132",
-            width=2,
-            stipple="gray25",
-        )
-        for index, point_mm in enumerate(self.profile.points_mm):
-            x_px, y_px = self._world_to_canvas(point_mm)
-            point_fill = "#2d241f"
-            point_outline = ""
-            if index in self.distance_point_indices:
-                point_fill = "#3f6b5b"
-                point_outline = "#dceee6"
-            self.canvas.create_oval(x_px - 5, y_px - 5, x_px + 5, y_px + 5, fill=point_fill, outline=point_outline, width=2)
-            self.canvas.create_text(x_px + 12, y_px - 12, text=str(index + 1), fill="#2d241f", font=("Segoe UI", 9, "bold"))
+        if self._is_leadframe_canvas_context():
+            if not self.leadframe_profiles:
+                return
+            for shape_index, profile in enumerate(self.leadframe_profiles, start=1):
+                if len(profile.points_mm) < 2:
+                    continue
+                flat_points: list[float] = []
+                for point_mm in profile.points_mm:
+                    x_px, y_px = self._world_to_canvas(point_mm)
+                    flat_points.extend([x_px, y_px])
+                if profile.closed and len(profile.points_mm) >= 3:
+                    self.canvas.create_polygon(
+                        *flat_points,
+                        fill="#d9c4a1",
+                        outline="#6f5132",
+                        width=2,
+                        stipple="gray25",
+                    )
+                else:
+                    self.canvas.create_line(*flat_points, fill="#6f5132", width=3)
+                for point_index, point_mm in enumerate(profile.points_mm, start=1):
+                    x_px, y_px = self._world_to_canvas(point_mm)
+                    self.canvas.create_oval(x_px - 5, y_px - 5, x_px + 5, y_px + 5, fill="#2d241f", outline="", width=2)
+                    self.canvas.create_text(
+                        x_px + 12,
+                        y_px - 12,
+                        text=f"{shape_index}.{point_index}",
+                        fill="#2d241f",
+                        font=("Segoe UI", 8, "bold"),
+                    )
+        else:
+            active_profile = self._active_profile()
+            if len(active_profile.points_mm) < 2:
+                return
+            flat_points: list[float] = []
+            for point_mm in active_profile.points_mm:
+                x_px, y_px = self._world_to_canvas(point_mm)
+                flat_points.extend([x_px, y_px])
+            self.canvas.create_polygon(
+                *flat_points,
+                fill="#d9c4a1",
+                outline="#6f5132",
+                width=2,
+                stipple="gray25",
+            )
+            for index, point_mm in enumerate(active_profile.points_mm):
+                x_px, y_px = self._world_to_canvas(point_mm)
+                point_fill = "#2d241f"
+                point_outline = ""
+                if index in self.distance_point_indices:
+                    point_fill = "#3f6b5b"
+                    point_outline = "#dceee6"
+                self.canvas.create_oval(x_px - 5, y_px - 5, x_px + 5, y_px + 5, fill=point_fill, outline=point_outline, width=2)
+                self.canvas.create_text(x_px + 12, y_px - 12, text=str(index + 1), fill="#2d241f", font=("Segoe UI", 9, "bold"))
 
-        if len(self.distance_point_indices) == 2:
-            first_point = self.profile.points_mm[self.distance_point_indices[0]]
-            second_point = self.profile.points_mm[self.distance_point_indices[1]]
+        if not self._is_leadframe_canvas_context() and len(self.distance_point_indices) == 2:
+            first_point = active_profile.points_mm[self.distance_point_indices[0]]
+            second_point = active_profile.points_mm[self.distance_point_indices[1]]
             first_x, first_y = self._world_to_canvas(first_point)
             second_x, second_y = self._world_to_canvas(second_point)
             self.canvas.create_line(first_x, first_y, second_x, second_y, fill="#3f6b5b", dash=(6, 4), width=2)
@@ -2813,17 +5051,27 @@ class IcChipGeneratorApp:
                 )
 
     def _draw_draft(self) -> None:
-        if not self.current_points_px:
+        active_draft = self._active_draft_points()
+        if not active_draft:
+            if self.snapped_preview_cursor_px is not None:
+                self.canvas.create_oval(
+                    self.snapped_preview_cursor_px[0] - 5,
+                    self.snapped_preview_cursor_px[1] - 5,
+                    self.snapped_preview_cursor_px[0] + 5,
+                    self.snapped_preview_cursor_px[1] + 5,
+                    fill="#3f6b5b",
+                    outline="",
+                )
             return
         flat_points: list[float] = []
-        for x_px, y_px in self.current_points_px:
+        for x_px, y_px in active_draft:
             flat_points.extend([x_px, y_px])
             self.canvas.create_oval(x_px - 4, y_px - 4, x_px + 4, y_px + 4, fill="#7d4b2f", outline="")
         if len(flat_points) >= 4:
             self.canvas.create_line(*flat_points, fill="#7d4b2f", width=2)
         preview_point = self.snapped_preview_cursor_px if self.snapped_preview_cursor_px is not None else self.preview_cursor_px
         if preview_point is not None:
-            last_x, last_y = self.current_points_px[-1]
+            last_x, last_y = active_draft[-1]
             line_color = "#3f6b5b" if self.snapped_preview_cursor_px is not None else "#7d4b2f"
             self.canvas.create_line(last_x, last_y, preview_point[0], preview_point[1], fill=line_color, dash=(5, 4), width=2)
             if self.snapped_preview_cursor_px is not None:
@@ -2833,6 +5081,7 @@ class IcChipGeneratorApp:
         self.canvas.delete("all")
         self._draw_grid()
         self._draw_stage_three_side_guide()
+        self._draw_leadframe_design_guide()
         self._draw_saved_profile()
         self._draw_draft()
 
@@ -2864,11 +5113,29 @@ class IcChipGeneratorApp:
                 "current_step_index": self.step_index,
                 "current_step_title": self.step_titles[self.step_index],
                 "draft_points_px": [list(point) for point in self.current_points_px],
+                "leadframe_profile_points_mm": [list(point) for point in (self.leadframe_profiles[0].points_mm if self.leadframe_profiles else [])],
+                "leadframe_profiles_points_mm": [
+                    [list(point) for point in profile.points_mm]
+                    for profile in self.leadframe_profiles
+                ],
+                "leadframe_profiles": [
+                    {
+                        "points_mm": [list(point) for point in profile.points_mm],
+                        "closed": profile.closed,
+                    }
+                    for profile in self.leadframe_profiles
+                ],
+                "leadframe_draft_points_px": [list(point) for point in self.leadframe_current_points_px],
                 "distance_target_mm": float(self.distance_target_var.get()),
                 "lead_offset_mm": float(self.lead_offset_var.get()),
-                "die_leadframe_ratio_percent": float(self.die_leadframe_ratio_var.get()),
-                "die_leadframe_clearance_mm": float(self.die_leadframe_clearance_var.get()),
+                "die_leadframe_width_mm": float(self.die_leadframe_width_var.get()),
+                "die_leadframe_depth_mm": float(self.die_leadframe_depth_var.get()),
                 "die_leadframe_thickness_mm": float(self.die_leadframe_thickness_var.get()),
+                "leadframe_path_width_mm": float(self.leadframe_path_width_var.get()),
+                "leadframe_path_thickness_mm": float(self.leadframe_path_thickness_var.get()),
+                "die_leadframe_center_mode": self.die_leadframe_center_mode_var.get().strip().lower() or "region_centroid",
+                "die_leadframe_center_x_mm": float(self.die_leadframe_center_x_var.get()),
+                "die_leadframe_center_y_mm": float(self.die_leadframe_center_y_var.get()),
                 "silicon_die_width_mm": float(self.silicon_die_width_var.get()),
                 "silicon_die_depth_mm": float(self.silicon_die_depth_var.get()),
                 "silicon_die_thickness_mm": float(self.silicon_die_thickness_var.get()),
@@ -2877,6 +5144,10 @@ class IcChipGeneratorApp:
                 "die_region_span_percent": float(self.die_region_span_percent_var.get()),
                 "die_region_depth_mm": float(self.die_region_depth_var.get()),
                 "die_region_offset_mm": float(self.die_region_offset_var.get()),
+                "die_region_top_count": int(self.die_region_top_count_var.get()),
+                "die_region_bottom_count": int(self.die_region_bottom_count_var.get()),
+                "die_region_left_count": int(self.die_region_left_count_var.get()),
+                "die_region_right_count": int(self.die_region_right_count_var.get()),
                 "die_pick_region": self.die_pick_region_var.get().strip().title() or "Top",
                 "die_pick_section_index": int(self.die_pick_section_index_var.get()),
                 "die_pick_position_percent": float(self.die_pick_position_percent_var.get()),
@@ -2894,6 +5165,22 @@ class IcChipGeneratorApp:
                 "wedge_bond_width_mm": float(self.wedge_bond_width_var.get()),
                 "wedge_bond_thickness_mm": float(self.wedge_bond_thickness_var.get()),
                 "wedge_approach_run_mm": float(self.wedge_approach_run_var.get()),
+                "encapsulation_height_mm": float(self.encapsulation_height_var.get()),
+                "simulation_clearance_mm": float(self.simulation_clearance_var.get()),
+                "step16_split_gap_mm": float(self.step16_split_gap_var.get()),
+                "show_step16_lead_system": bool(self.show_step16_lead_system_var.get()),
+                "show_step16_die_leadframe": bool(self.show_step16_die_leadframe_var.get()),
+                "show_step16_silicon_die": bool(self.show_step16_silicon_die_var.get()),
+                "show_step16_bond_assembly": bool(self.show_step16_bond_assembly_var.get()),
+                "show_step16_encapsulation_base": bool(self.show_step16_encapsulation_base_var.get()),
+                "show_step16_encapsulation_top": bool(self.show_step16_encapsulation_top_var.get()),
+                "step16_lead_system_color": self.step16_lead_system_color_var.get().strip() or "#c58a34",
+                "step16_die_leadframe_color": self.step16_die_leadframe_color_var.get().strip() or "#8e3f2b",
+                "step16_silicon_die_color": self.step16_silicon_die_color_var.get().strip() or "#232323",
+                "step16_bond_assembly_color": self.step16_bond_assembly_color_var.get().strip() or "#2563eb",
+                "step16_encapsulation_base_color": self.step16_encapsulation_base_color_var.get().strip() or DEFAULT_BODY_COLOR,
+                "step16_encapsulation_top_color": self.step16_encapsulation_top_color_var.get().strip() or "#6f7b83",
+                "selected_intersection_pairs": self._selected_intersection_pairs(),
                 "distance_pick_active": self.distance_pick_active,
                 "distance_point_indices": list(self.distance_point_indices),
             }
@@ -2934,67 +5221,115 @@ class IcChipGeneratorApp:
                 for side in side_settings
             ]
         if stage_index >= 3:
+            payload["die_leadframe"] = {
+                "die_leadframe_width_mm": float(self.die_leadframe_width_var.get()),
+                "die_leadframe_depth_mm": float(self.die_leadframe_depth_var.get()),
+                "die_leadframe_thickness_mm": float(self.die_leadframe_thickness_var.get()),
+                "leadframe_path_width_mm": float(self.leadframe_path_width_var.get()),
+                "leadframe_path_thickness_mm": float(self.leadframe_path_thickness_var.get()),
+                "die_leadframe_center_mode": self.die_leadframe_center_mode_var.get().strip().lower() or "region_centroid",
+                "die_leadframe_center_x_mm": float(self.die_leadframe_center_x_var.get()),
+                "die_leadframe_center_y_mm": float(self.die_leadframe_center_y_var.get()),
+            }
+        if stage_index >= 4:
+            payload["lead_frame_design"] = {
+                "leadframe_profile_points_mm": [list(point) for point in (self.leadframe_profiles[0].points_mm if self.leadframe_profiles else [])],
+                "leadframe_profiles_points_mm": [
+                    [list(point) for point in profile.points_mm]
+                    for profile in self.leadframe_profiles
+                ],
+                "leadframe_profiles": [
+                    {
+                        "points_mm": [list(point) for point in profile.points_mm],
+                        "closed": profile.closed,
+                    }
+                    for profile in self.leadframe_profiles
+                ],
+                "leadframe_draft_points_px": [list(point) for point in self.leadframe_current_points_px],
+            }
+        if stage_index >= 5:
             payload["overall_3d_placement"] = {
                 "body_width_mm": float(self.body_width_var.get()),
                 "body_depth_mm": float(self.body_depth_var.get()),
                 "body_height_mm": float(self.body_height_var.get()),
             }
-        if stage_index >= 4:
+        if stage_index >= 6:
             payload["lead_offset"] = {
                 "lead_offset_mm": float(self.lead_offset_var.get()),
             }
-        if stage_index >= 5:
-            payload["die_leadframe"] = {
-                "die_leadframe_ratio_percent": float(self.die_leadframe_ratio_var.get()),
-                "die_leadframe_clearance_mm": float(self.die_leadframe_clearance_var.get()),
-                "die_leadframe_thickness_mm": float(self.die_leadframe_thickness_var.get()),
-            }
-        if stage_index >= 6:
+        if stage_index >= 7:
             payload["silicon_die"] = {
                 "silicon_die_width_mm": float(self.silicon_die_width_var.get()),
                 "silicon_die_depth_mm": float(self.silicon_die_depth_var.get()),
                 "silicon_die_thickness_mm": float(self.silicon_die_thickness_var.get()),
             }
-        if stage_index >= 7:
+        if stage_index >= 8:
             payload["leg_positions"] = {
                 "leg_pick_distance_mm": float(self.leg_pick_distance_var.get()),
                 "leg_pick_marker_size_mm": float(self.leg_pick_marker_size_var.get()),
             }
-        if stage_index >= 8:
+        if stage_index >= 9:
             payload["die_regions"] = {
                 "die_region_span_percent": float(self.die_region_span_percent_var.get()),
                 "die_region_depth_mm": float(self.die_region_depth_var.get()),
                 "die_region_offset_mm": float(self.die_region_offset_var.get()),
+                "die_region_top_count": int(self.die_region_top_count_var.get()),
+                "die_region_bottom_count": int(self.die_region_bottom_count_var.get()),
+                "die_region_left_count": int(self.die_region_left_count_var.get()),
+                "die_region_right_count": int(self.die_region_right_count_var.get()),
                 "die_pick_region": self.die_pick_region_var.get().strip().title() or "Top",
                 "die_pick_section_index": int(self.die_pick_section_index_var.get()),
                 "die_pick_position_percent": float(self.die_pick_position_percent_var.get()),
                 "die_pick_marker_size_mm": float(self.die_pick_marker_size_var.get()),
             }
-        if stage_index >= 9:
+        if stage_index >= 10:
             payload["bond_arcs"] = {
                 "arc_height_mm": float(self.arc_height_var.get()),
                 "arc_xy_noise_mm": float(self.arc_xy_noise_var.get()),
                 "wire_arc_point_spacing_mm": float(self.wire_arc_point_spacing_var.get()),
             }
-        if stage_index >= 10:
+        if stage_index >= 11:
             payload["ball_bond_formation"] = {
                 "ball_bond_diameter_mm": float(self.ball_bond_diameter_var.get()),
                 "ball_bond_length_mm": float(self.ball_bond_length_var.get()),
                 "ball_bond_revolution_steps": int(self.ball_bond_revolution_steps_var.get()),
             }
-        if stage_index >= 11:
+        if stage_index >= 12:
             payload["bond_wire_tube"] = {
                 "wire_diameter_mm": float(self.wire_diameter_var.get()),
                 "wire_rise_z_mm": float(self.wire_rise_z_var.get()),
                 "wire_arc_point_spacing_mm": float(self.wire_arc_point_spacing_var.get()),
                 "wire_tube_side_count": int(self.wire_tube_side_count_var.get()),
             }
-        if stage_index >= 12:
+        if stage_index >= 13:
             payload["wedge_bond_ending"] = {
                 "wedge_bond_length_mm": float(self.wedge_bond_length_var.get()),
                 "wedge_bond_width_mm": float(self.wedge_bond_width_var.get()),
                 "wedge_bond_thickness_mm": float(self.wedge_bond_thickness_var.get()),
                 "wedge_approach_run_mm": float(self.wedge_approach_run_var.get()),
+            }
+        if stage_index >= 14:
+            payload["encapsulation"] = {
+                "encapsulation_height_mm": float(self.encapsulation_height_var.get()),
+                "simulation_clearance_mm": float(self.simulation_clearance_var.get()),
+            }
+        if stage_index >= 15:
+            payload["intersection_check"] = {
+                "step16_split_gap_mm": float(self.step16_split_gap_var.get()),
+                "show_step16_lead_system": bool(self.show_step16_lead_system_var.get()),
+                "show_step16_die_leadframe": bool(self.show_step16_die_leadframe_var.get()),
+                "show_step16_silicon_die": bool(self.show_step16_silicon_die_var.get()),
+                "show_step16_bond_assembly": bool(self.show_step16_bond_assembly_var.get()),
+                "show_step16_encapsulation_base": bool(self.show_step16_encapsulation_base_var.get()),
+                "show_step16_encapsulation_top": bool(self.show_step16_encapsulation_top_var.get()),
+                "step16_lead_system_color": self.step16_lead_system_color_var.get().strip() or "#c58a34",
+                "step16_die_leadframe_color": self.step16_die_leadframe_color_var.get().strip() or "#8e3f2b",
+                "step16_silicon_die_color": self.step16_silicon_die_color_var.get().strip() or "#232323",
+                "step16_bond_assembly_color": self.step16_bond_assembly_color_var.get().strip() or "#2563eb",
+                "step16_encapsulation_base_color": self.step16_encapsulation_base_color_var.get().strip() or DEFAULT_BODY_COLOR,
+                "step16_encapsulation_top_color": self.step16_encapsulation_top_color_var.get().strip() or "#6f7b83",
+                "selected_intersection_pairs": self._selected_intersection_pairs(),
+                "intersection_report": self.intersection_report_var.get(),
             }
         return payload
 
@@ -3051,6 +5386,37 @@ class IcChipGeneratorApp:
     def _push_payload(self, launch_if_missing: bool = False) -> None:
         try:
             project_payload = self._project_payload()
+            if self.step_index >= 15:
+                geometry = build_scene_geometry(project_payload)
+                intersections = geometry.get("intersection_pairs", [])
+                warnings = geometry.get("encapsulation_warnings", [])
+                selected_pairs = self._selected_intersection_pairs()
+                available_pair_labels = [str(item.get("pair", "")).strip() for item in intersections if str(item.get("pair", "")).strip()]
+                selected_pairs = [pair_label for pair_label in selected_pairs if pair_label in available_pair_labels]
+                self._refresh_intersection_pair_checkboxes(intersections, selected_pairs)
+                if intersections:
+                    report_lines = ["Intersecting parts found:"]
+                    for item in intersections:
+                        pair_text = str(item.get("pair", "Unknown intersection"))
+                        details_text = str(item.get("details", "")).strip()
+                        report_lines.append(f"- {pair_text}")
+                        if details_text:
+                            report_lines.append(f"  {details_text}")
+                else:
+                    report_lines = ["No intersections detected between the simulation solids."]
+                if warnings:
+                    report_lines.append("")
+                    report_lines.append("Warnings:")
+                    report_lines.extend(f"- {item}" for item in warnings)
+                self.intersection_report_var.set("\n".join(report_lines))
+                project_payload = self._project_payload()
+            elif self.step_index >= 14:
+                geometry = build_scene_geometry(project_payload)
+                warnings = geometry.get("encapsulation_warnings", [])
+                if warnings:
+                    self.intersection_report_var.set("Encapsulation warnings:\n" + "\n".join(f"- {item}" for item in warnings))
+                else:
+                    self.intersection_report_var.set("Step 16 will list any remaining intersecting parts.")
             write_bridge_payload(self.bridge_path, project_payload)
             self._autosave_stage_jsons()
             if launch_if_missing:

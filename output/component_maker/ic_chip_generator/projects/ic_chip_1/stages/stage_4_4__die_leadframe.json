@@ -1,9 +1,9 @@
 {
   "saved_stage_index": 3,
-  "saved_stage_title": "4. Overall 3D Placement",
-  "current_step_index": 12,
-  "current_step_title": "13. Wedge Bond Ending",
-  "status_message": "13. Wedge Bond Ending active.",
+  "saved_stage_title": "4. Die Leadframe",
+  "current_step_index": 15,
+  "current_step_title": "16. Intersection Check",
+  "status_message": "16. Intersection Check active.",
   "lead_profile": {
     "profile_points_mm": [
       [
@@ -42,54 +42,59 @@
     "draft_points_px": [],
     "distance_target_mm": 1.0,
     "distance_point_indices": [
-      3,
-      4
+      7,
+      0
     ]
   },
   "lead_extrusion": {
-    "leg_length_mm": 4.0
+    "leg_length_mm": 2.0
   },
   "legs_per_side": [
     {
       "name": "Top",
-      "count": 0,
-      "pitch_mm": 15.0,
+      "count": 4,
+      "pitch_mm": 20.0,
       "pitch_axis": "x",
       "rotation_x_deg": 0.0,
       "rotation_y_deg": 0.0,
-      "rotation_z_deg": 0.0
+      "rotation_z_deg": 90.0
     },
     {
       "name": "Bottom",
-      "count": 0,
-      "pitch_mm": 15.0,
+      "count": 4,
+      "pitch_mm": 20.0,
       "pitch_axis": "x",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 90.0
+    },
+    {
+      "name": "Left",
+      "count": 0,
+      "pitch_mm": 1.27,
+      "pitch_axis": "y",
       "rotation_x_deg": 0.0,
       "rotation_y_deg": 0.0,
       "rotation_z_deg": 0.0
     },
     {
-      "name": "Left",
-      "count": 4,
-      "pitch_mm": 15.0,
-      "pitch_axis": "y",
-      "rotation_x_deg": 0.0,
-      "rotation_y_deg": 0.0,
-      "rotation_z_deg": 90.0
-    },
-    {
       "name": "Right",
-      "count": 4,
-      "pitch_mm": 15.0,
+      "count": 0,
+      "pitch_mm": 1.27,
       "pitch_axis": "y",
       "rotation_x_deg": 0.0,
       "rotation_y_deg": 0.0,
-      "rotation_z_deg": 90.0
+      "rotation_z_deg": 0.0
     }
   ],
-  "overall_3d_placement": {
-    "body_width_mm": 40.0,
-    "body_depth_mm": 60.0,
-    "body_height_mm": 1.6
+  "die_leadframe": {
+    "die_leadframe_width_mm": 10.0,
+    "die_leadframe_depth_mm": 10.0,
+    "die_leadframe_thickness_mm": 1.0,
+    "leadframe_path_width_mm": 2.0,
+    "leadframe_path_thickness_mm": 1.0,
+    "die_leadframe_center_mode": "custom_point",
+    "die_leadframe_center_x_mm": 0.0,
+    "die_leadframe_center_y_mm": 0.0
   }
 }

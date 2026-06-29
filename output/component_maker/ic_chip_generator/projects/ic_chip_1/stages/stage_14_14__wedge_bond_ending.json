@@ -1,0 +1,489 @@
+{
+  "saved_stage_index": 13,
+  "saved_stage_title": "14. Wedge Bond Ending",
+  "current_step_index": 15,
+  "current_step_title": "16. Intersection Check",
+  "status_message": "16. Intersection Check active.",
+  "lead_profile": {
+    "profile_points_mm": [
+      [
+        -8.0,
+        1.0416666666666667
+      ],
+      [
+        -1.4166666666666667,
+        1.0416666666666667
+      ],
+      [
+        2.25,
+        -1.5833333333333335
+      ],
+      [
+        8.125,
+        -1.5833333333333335
+      ],
+      [
+        8.125,
+        -2.5833333333333335
+      ],
+      [
+        1.5833333333333333,
+        -2.5833333333333335
+      ],
+      [
+        -2.125,
+        0.041666666666666664
+      ],
+      [
+        -8.0,
+        0.041666666666666664
+      ]
+    ],
+    "draft_points_px": [],
+    "distance_target_mm": 1.0,
+    "distance_point_indices": [
+      7,
+      0
+    ]
+  },
+  "lead_extrusion": {
+    "leg_length_mm": 2.0
+  },
+  "legs_per_side": [
+    {
+      "name": "Top",
+      "count": 4,
+      "pitch_mm": 20.0,
+      "pitch_axis": "x",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 90.0
+    },
+    {
+      "name": "Bottom",
+      "count": 4,
+      "pitch_mm": 20.0,
+      "pitch_axis": "x",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 90.0
+    },
+    {
+      "name": "Left",
+      "count": 0,
+      "pitch_mm": 1.27,
+      "pitch_axis": "y",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    },
+    {
+      "name": "Right",
+      "count": 0,
+      "pitch_mm": 1.27,
+      "pitch_axis": "y",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    }
+  ],
+  "die_leadframe": {
+    "die_leadframe_width_mm": 10.0,
+    "die_leadframe_depth_mm": 10.0,
+    "die_leadframe_thickness_mm": 1.0,
+    "leadframe_path_width_mm": 2.0,
+    "leadframe_path_thickness_mm": 1.0,
+    "die_leadframe_center_mode": "custom_point",
+    "die_leadframe_center_x_mm": 0.0,
+    "die_leadframe_center_y_mm": 0.0
+  },
+  "lead_frame_design": {
+    "leadframe_profile_points_mm": [
+      [
+        -30.0,
+        20.0
+      ],
+      [
+        -30.0,
+        12.116029001317472
+      ],
+      [
+        -19.184307287320774,
+        1.300336288638241
+      ],
+      [
+        -5.5,
+        1.300336288638241
+      ]
+    ],
+    "leadframe_profiles_points_mm": [
+      [
+        [
+          -30.0,
+          20.0
+        ],
+        [
+          -30.0,
+          12.116029001317472
+        ],
+        [
+          -19.184307287320774,
+          1.300336288638241
+        ],
+        [
+          -5.5,
+          1.300336288638241
+        ]
+      ],
+      [
+        [
+          -10.0,
+          20.0
+        ],
+        [
+          -10.0,
+          17.403089564334444
+        ],
+        [
+          -1.4015294748648333,
+          8.804619039199274
+        ],
+        [
+          -1.4015294748648333,
+          5.5
+        ]
+      ],
+      [
+        [
+          30.0,
+          20.0
+        ],
+        [
+          30.0,
+          12.116029001317472
+        ],
+        [
+          19.184307287320774,
+          1.300336288638241
+        ],
+        [
+          5.5,
+          1.300336288638241
+        ]
+      ],
+      [
+        [
+          10.0,
+          20.0
+        ],
+        [
+          10.0,
+          17.403089564334444
+        ],
+        [
+          1.4015294748648333,
+          8.804619039199274
+        ],
+        [
+          1.4015294748648333,
+          5.5
+        ]
+      ],
+      [
+        [
+          -30.0,
+          -20.0
+        ],
+        [
+          -30.0,
+          -12.116029001317472
+        ],
+        [
+          -19.184307287320774,
+          -1.300336288638241
+        ],
+        [
+          -5.5,
+          -1.300336288638241
+        ]
+      ],
+      [
+        [
+          -10.0,
+          -20.0
+        ],
+        [
+          -10.0,
+          -17.403089564334444
+        ],
+        [
+          -1.4015294748648333,
+          -8.804619039199274
+        ],
+        [
+          -1.4015294748648333,
+          -5.5
+        ]
+      ],
+      [
+        [
+          30.0,
+          -20.0
+        ],
+        [
+          30.0,
+          -12.116029001317472
+        ],
+        [
+          19.184307287320774,
+          -1.300336288638241
+        ],
+        [
+          5.5,
+          -1.300336288638241
+        ]
+      ],
+      [
+        [
+          10.0,
+          -20.0
+        ],
+        [
+          10.0,
+          -17.403089564334444
+        ],
+        [
+          1.4015294748648333,
+          -8.804619039199274
+        ],
+        [
+          1.4015294748648333,
+          -5.5
+        ]
+      ]
+    ],
+    "leadframe_profiles": [
+      {
+        "points_mm": [
+          [
+            -30.0,
+            20.0
+          ],
+          [
+            -30.0,
+            12.116029001317472
+          ],
+          [
+            -19.184307287320774,
+            1.300336288638241
+          ],
+          [
+            -5.5,
+            1.300336288638241
+          ]
+        ],
+        "closed": false
+      },
+      {
+        "points_mm": [
+          [
+            -10.0,
+            20.0
+          ],
+          [
+            -10.0,
+            17.403089564334444
+          ],
+          [
+            -1.4015294748648333,
+            8.804619039199274
+          ],
+          [
+            -1.4015294748648333,
+            5.5
+          ]
+        ],
+        "closed": false
+      },
+      {
+        "points_mm": [
+          [
+            30.0,
+            20.0
+          ],
+          [
+            30.0,
+            12.116029001317472
+          ],
+          [
+            19.184307287320774,
+            1.300336288638241
+          ],
+          [
+            5.5,
+            1.300336288638241
+          ]
+        ],
+        "closed": false
+      },
+      {
+        "points_mm": [
+          [
+            10.0,
+            20.0
+          ],
+          [
+            10.0,
+            17.403089564334444
+          ],
+          [
+            1.4015294748648333,
+            8.804619039199274
+          ],
+          [
+            1.4015294748648333,
+            5.5
+          ]
+        ],
+        "closed": false
+      },
+      {
+        "points_mm": [
+          [
+            -30.0,
+            -20.0
+          ],
+          [
+            -30.0,
+            -12.116029001317472
+          ],
+          [
+            -19.184307287320774,
+            -1.300336288638241
+          ],
+          [
+            -5.5,
+            -1.300336288638241
+          ]
+        ],
+        "closed": false
+      },
+      {
+        "points_mm": [
+          [
+            -10.0,
+            -20.0
+          ],
+          [
+            -10.0,
+            -17.403089564334444
+          ],
+          [
+            -1.4015294748648333,
+            -8.804619039199274
+          ],
+          [
+            -1.4015294748648333,
+            -5.5
+          ]
+        ],
+        "closed": false
+      },
+      {
+        "points_mm": [
+          [
+            30.0,
+            -20.0
+          ],
+          [
+            30.0,
+            -12.116029001317472
+          ],
+          [
+            19.184307287320774,
+            -1.300336288638241
+          ],
+          [
+            5.5,
+            -1.300336288638241
+          ]
+        ],
+        "closed": false
+      },
+      {
+        "points_mm": [
+          [
+            10.0,
+            -20.0
+          ],
+          [
+            10.0,
+            -17.403089564334444
+          ],
+          [
+            1.4015294748648333,
+            -8.804619039199274
+          ],
+          [
+            1.4015294748648333,
+            -5.5
+          ]
+        ],
+        "closed": false
+      }
+    ],
+    "leadframe_draft_points_px": []
+  },
+  "overall_3d_placement": {
+    "body_width_mm": 80.0,
+    "body_depth_mm": 40.0,
+    "body_height_mm": 1.6
+  },
+  "lead_offset": {
+    "lead_offset_mm": 0.0
+  },
+  "silicon_die": {
+    "silicon_die_width_mm": 8.0,
+    "silicon_die_depth_mm": 8.0,
+    "silicon_die_thickness_mm": 0.4
+  },
+  "leg_positions": {
+    "leg_pick_distance_mm": 1.0,
+    "leg_pick_marker_size_mm": 1.0
+  },
+  "die_regions": {
+    "die_region_span_percent": 60.0,
+    "die_region_depth_mm": 0.5,
+    "die_region_offset_mm": 0.1,
+    "die_region_top_count": 2,
+    "die_region_bottom_count": 2,
+    "die_region_left_count": 2,
+    "die_region_right_count": 2,
+    "die_pick_region": "Top",
+    "die_pick_section_index": 1,
+    "die_pick_position_percent": 50.0,
+    "die_pick_marker_size_mm": 0.06
+  },
+  "bond_arcs": {
+    "arc_height_mm": 1.0,
+    "arc_xy_noise_mm": 0.0,
+    "wire_arc_point_spacing_mm": 0.01
+  },
+  "ball_bond_formation": {
+    "ball_bond_diameter_mm": 0.05,
+    "ball_bond_length_mm": 0.04,
+    "ball_bond_revolution_steps": 12
+  },
+  "bond_wire_tube": {
+    "wire_diameter_mm": 0.05,
+    "wire_rise_z_mm": 0.12,
+    "wire_arc_point_spacing_mm": 0.01,
+    "wire_tube_side_count": 10
+  },
+  "wedge_bond_ending": {
+    "wedge_bond_length_mm": 0.3,
+    "wedge_bond_width_mm": 0.08,
+    "wedge_bond_thickness_mm": 0.02,
+    "wedge_approach_run_mm": 1.0
+  }
+}

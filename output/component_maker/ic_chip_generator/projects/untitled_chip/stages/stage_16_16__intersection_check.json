@@ -1,0 +1,143 @@
+{
+  "saved_stage_index": 15,
+  "saved_stage_title": "16. Intersection Check",
+  "current_step_index": 0,
+  "current_step_title": "1. Draw Lead Profile",
+  "status_message": "Step 1: draw a closed 2D lead profile.",
+  "lead_profile": {
+    "profile_points_mm": [],
+    "draft_points_px": [],
+    "distance_target_mm": 1.0,
+    "distance_point_indices": []
+  },
+  "lead_extrusion": {
+    "leg_length_mm": 4.0
+  },
+  "legs_per_side": [
+    {
+      "name": "Top",
+      "count": 4,
+      "pitch_mm": 1.27,
+      "pitch_axis": "x",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    },
+    {
+      "name": "Bottom",
+      "count": 4,
+      "pitch_mm": 1.27,
+      "pitch_axis": "x",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    },
+    {
+      "name": "Left",
+      "count": 4,
+      "pitch_mm": 1.27,
+      "pitch_axis": "y",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    },
+    {
+      "name": "Right",
+      "count": 4,
+      "pitch_mm": 1.27,
+      "pitch_axis": "y",
+      "rotation_x_deg": 0.0,
+      "rotation_y_deg": 0.0,
+      "rotation_z_deg": 0.0
+    }
+  ],
+  "die_leadframe": {
+    "die_leadframe_width_mm": 8.0,
+    "die_leadframe_depth_mm": 8.0,
+    "die_leadframe_thickness_mm": 0.08,
+    "leadframe_path_width_mm": 0.3,
+    "leadframe_path_thickness_mm": 1.0,
+    "die_leadframe_center_mode": "region_centroid",
+    "die_leadframe_center_x_mm": 0.0,
+    "die_leadframe_center_y_mm": 0.0
+  },
+  "lead_frame_design": {
+    "leadframe_profile_points_mm": [],
+    "leadframe_profiles_points_mm": [],
+    "leadframe_profiles": [],
+    "leadframe_draft_points_px": []
+  },
+  "overall_3d_placement": {
+    "body_width_mm": 10.0,
+    "body_depth_mm": 10.0,
+    "body_height_mm": 1.6
+  },
+  "lead_offset": {
+    "lead_offset_mm": 0.0
+  },
+  "silicon_die": {
+    "silicon_die_width_mm": 2.5,
+    "silicon_die_depth_mm": 2.5,
+    "silicon_die_thickness_mm": 0.12
+  },
+  "leg_positions": {
+    "leg_pick_distance_mm": 0.2,
+    "leg_pick_marker_size_mm": 0.08
+  },
+  "die_regions": {
+    "die_region_span_percent": 70.0,
+    "die_region_depth_mm": 0.15,
+    "die_region_offset_mm": 0.05,
+    "die_region_top_count": 4,
+    "die_region_bottom_count": 4,
+    "die_region_left_count": 0,
+    "die_region_right_count": 0,
+    "die_pick_region": "Top",
+    "die_pick_section_index": 1,
+    "die_pick_position_percent": 50.0,
+    "die_pick_marker_size_mm": 0.06
+  },
+  "bond_arcs": {
+    "arc_height_mm": 0.5,
+    "arc_xy_noise_mm": 0.0,
+    "wire_arc_point_spacing_mm": 0.08
+  },
+  "ball_bond_formation": {
+    "ball_bond_diameter_mm": 0.12,
+    "ball_bond_length_mm": 0.08,
+    "ball_bond_revolution_steps": 24
+  },
+  "bond_wire_tube": {
+    "wire_diameter_mm": 0.03,
+    "wire_rise_z_mm": 0.12,
+    "wire_arc_point_spacing_mm": 0.08,
+    "wire_tube_side_count": 10
+  },
+  "wedge_bond_ending": {
+    "wedge_bond_length_mm": 0.18,
+    "wedge_bond_width_mm": 0.08,
+    "wedge_bond_thickness_mm": 0.02,
+    "wedge_approach_run_mm": 0.18
+  },
+  "encapsulation": {
+    "encapsulation_height_mm": 1.6,
+    "simulation_clearance_mm": 0.001
+  },
+  "intersection_check": {
+    "step16_split_gap_mm": 0.01,
+    "show_step16_lead_system": true,
+    "show_step16_die_leadframe": true,
+    "show_step16_silicon_die": true,
+    "show_step16_bond_assembly": true,
+    "show_step16_encapsulation_base": true,
+    "show_step16_encapsulation_top": true,
+    "step16_lead_system_color": "#c58a34",
+    "step16_die_leadframe_color": "#8e3f2b",
+    "step16_silicon_die_color": "#232323",
+    "step16_bond_assembly_color": "#2563eb",
+    "step16_encapsulation_base_color": "#24201c",
+    "step16_encapsulation_top_color": "#6f7b83",
+    "selected_intersection_pairs": [],
+    "intersection_report": "Step 16 will list any remaining intersecting parts."
+  }
+}

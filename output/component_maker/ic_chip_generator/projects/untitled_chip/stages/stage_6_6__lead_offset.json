@@ -1,6 +1,6 @@
 {
-  "saved_stage_index": 4,
-  "saved_stage_title": "5. Overall 3D Placement",
+  "saved_stage_index": 5,
+  "saved_stage_title": "6. Lead Offset",
   "current_step_index": 0,
   "current_step_title": "1. Draw Lead Profile",
   "status_message": "Step 1: draw a closed 2D lead profile.",
@@ -62,5 +62,10 @@
   },
   "lead_offset": {
     "lead_offset_mm": 0.0
+  },
+  "die_leadframe": {
+    "die_leadframe_ratio_percent": 80.0,
+    "die_leadframe_clearance_mm": 0.05,
+    "die_leadframe_thickness_mm": 0.08
   }
 }
