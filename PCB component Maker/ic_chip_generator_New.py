@@ -28,6 +28,7 @@ CANVAS_AXIS = "#c7b39b"
 VIEWER_PAYLOAD_NAME = "step2_viewer_payload.json"
 DIE_CLEARANCE_MM = 0.001
 LEADFRAME_CONTACT_CLEARANCE_MM = 0.001
+HELPER_REGION_HOVER_MM = 0.001
 
 
 def _safe_stage_slug(text: str) -> str:
@@ -608,13 +609,58 @@ def _viewer_visibility_from_payload(payload: dict) -> dict[str, bool]:
     if not isinstance(visibility, dict):
         visibility = {}
     return {
-        "Centered Die Compartment": bool(visibility.get("centered_die_compartment", False)),
+        "Centered Die Compartment": bool(visibility.get("centered_die_compartment", True)),
         "Silicon Die": bool(visibility.get("silicon_die", True)),
         "Lead Frame Paths": bool(visibility.get("lead_frame_paths", True)),
+        "Bond End Regions": bool(visibility.get("bond_end_regions", True)),
+        "Bond Start Regions": bool(visibility.get("bond_start_regions", True)),
         "Bond Assemblies": bool(visibility.get("bond_assemblies", True)),
         "Scaled Outer Model": bool(visibility.get("scaled_outer_model", True)),
         "Encapsulation": bool(visibility.get("encapsulation", True)),
+        "Legs": bool(visibility.get("legs", True)),
     }
+
+
+def _leg_profile_points_from_payload(payload: dict, leadframe_thickness_mm: float) -> list[tuple[float, float]]:
+    profile_payload = payload.get("leg_profile_mm", [])
+    points: list[tuple[float, float]] = []
+    if isinstance(profile_payload, list):
+        for item in profile_payload:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                try:
+                    points.append((float(item[0]), float(item[1])))
+                except (TypeError, ValueError):
+                    continue
+    if len(points) >= 2:
+        return points
+    anchor_z = leadframe_thickness_mm / 2.0
+    return [(0.0, anchor_z), (0.35, anchor_z), (0.9, -0.25), (1.4, -0.45)]
+
+
+def _lead_leg_specs_from_payload(payload: dict) -> list[dict[str, object]]:
+    thickness_mm = max(0.05, _payload_float(payload, "thickness_z_mm", 0.2))
+    specs: list[dict[str, object]] = []
+    for path_index, path_payload in enumerate(payload.get("saved_paths_mm", []), start=1):
+        if not isinstance(path_payload, list):
+            continue
+        path_mm = [tuple(point) for point in path_payload if isinstance(point, (list, tuple)) and len(point) == 2]
+        if len(path_mm) < 2:
+            continue
+        start_x_mm, start_y_mm = path_mm[0]
+        next_x_mm, next_y_mm = path_mm[1]
+        outward_xy = _normalize_2d((start_x_mm - next_x_mm, start_y_mm - next_y_mm))
+        if outward_xy is None:
+            continue
+        side_xy = _left_normal_2d(outward_xy)
+        specs.append(
+            {
+                "path_index": path_index,
+                "anchor_xyz": (start_x_mm, start_y_mm, thickness_mm / 2.0),
+                "outward_xy": outward_xy,
+                "side_xy": side_xy,
+            }
+        )
+    return specs
 
 
 def _bond_start_region_centers_from_payload(payload: dict) -> list[dict[str, object]]:
@@ -677,12 +723,11 @@ def _bond_end_region_centers_from_payload(payload: dict) -> list[dict[str, objec
                 end_x_mm + (direction_xy[0] * offset_mm),
                 end_y_mm + (direction_xy[1] * offset_mm),
             )
-        dx = end_x_mm - path_mm[0][0]
-        dy = end_y_mm - path_mm[0][1]
-        if abs(dx) >= abs(dy):
-            side_name = "Right" if dx >= 0.0 else "Left"
+        center_x_mm, center_y_mm = center_mm
+        if abs(center_x_mm) >= abs(center_y_mm):
+            side_name = "Right" if center_x_mm >= 0.0 else "Left"
         else:
-            side_name = "Top" if dy >= 0.0 else "Bottom"
+            side_name = "Top" if center_y_mm >= 0.0 else "Bottom"
         regions.append(
             {
                 "path_index": path_index,
@@ -717,21 +762,28 @@ def _clockwise_indexed_items(items: list[dict[str, object]]) -> list[dict[str, o
     return sorted(items, key=sort_key)
 
 
-def _pair_nearest_leg_regions(leg_markers: list[dict[str, object]], die_regions: list[dict[str, object]]) -> list[tuple[dict[str, object], dict[str, object]]]:
+def _pair_side_ordered_regions(leg_markers: list[dict[str, object]], die_regions: list[dict[str, object]]) -> list[tuple[dict[str, object], dict[str, object]]]:
     if not leg_markers or not die_regions:
         return []
-    remaining_regions = list(die_regions)
+    side_order = ("Top", "Right", "Bottom", "Left")
+    grouped_legs: dict[str, list[dict[str, object]]] = {side_name: [] for side_name in side_order}
+    grouped_die_regions: dict[str, list[dict[str, object]]] = {side_name: [] for side_name in side_order}
+
+    for item in leg_markers:
+        side_name = str(item.get("side_name", "")).title()
+        if side_name in grouped_legs:
+            grouped_legs[side_name].append(item)
+    for item in die_regions:
+        side_name = str(item.get("side_name", "")).title()
+        if side_name in grouped_die_regions:
+            grouped_die_regions[side_name].append(item)
+
     pairs: list[tuple[dict[str, object], dict[str, object]]] = []
-    for leg_data in leg_markers:
-        leg_x, leg_y = leg_data.get("center_xy", leg_data.get("center_mm", (0.0, 0.0)))
-        nearest_index = min(
-            range(len(remaining_regions)),
-            key=lambda index: math.dist((leg_x, leg_y), remaining_regions[index].get("center_xy", remaining_regions[index].get("center_mm", (0.0, 0.0)))),
-        )
-        region_data = remaining_regions.pop(nearest_index)
-        pairs.append((leg_data, region_data))
-        if not remaining_regions:
-            break
+    for side_name in side_order:
+        ordered_legs = _clockwise_indexed_items(grouped_legs[side_name])
+        ordered_die_regions = _clockwise_indexed_items(grouped_die_regions[side_name])
+        for leg_data, region_data in zip(ordered_legs, ordered_die_regions):
+            pairs.append((leg_data, region_data))
     return pairs
 
 
@@ -925,6 +977,7 @@ def _build_flattened_terminal_mesh(
     wedge_tail_mm: float,
     side_count: int,
     leadframe_top_z: float,
+    wire_contact_clearance_mm: float,
     lateral_axis_xy: tuple[float, float],
     cap_start: bool = False,
 ) -> trimesh.Trimesh | None:
@@ -957,23 +1010,68 @@ def _build_flattened_terminal_mesh(
     section_size = max(8, side_count)
     width_end_radius = wedge_width_mm / 2.0
     height_end_radius = wedge_thickness_mm / 2.0
-    lateral = _vector_normalize((lateral_axis_xy[0], lateral_axis_xy[1], 0.0))
-    vertical = (0.0, 0.0, 1.0)
+    flatten_distance_start_ratio = 0.65
+    parallel_start = 0.9
+    parallel_full = 0.985
+    preferred_lateral = _vector_normalize((lateral_axis_xy[0], lateral_axis_xy[1], 0.0))
+    tangents: list[tuple[float, float, float]] = []
+    for index in range(len(geometry_points)):
+        if index == 0:
+            tangent = _vector_normalize(_vector_sub(geometry_points[1], geometry_points[0]))
+        elif index == len(geometry_points) - 1:
+            tangent = _vector_normalize(_vector_sub(geometry_points[-1], geometry_points[-2]))
+        else:
+            tangent = _vector_normalize(_vector_sub(geometry_points[index + 1], geometry_points[index - 1]))
+        tangents.append(tangent)
+
+    lateral: tuple[float, float, float] | None = None
+    vertical: tuple[float, float, float] | None = None
 
     sections: list[list[tuple[float, float, float]]] = []
-    for point_index, center in enumerate(geometry_points):
-        if distances[point_index] <= wedge_start_distance:
-            flatten_t = 0.0
-        elif distances[point_index] >= original_length:
-            flatten_t = 1.0
+    for point_index, (center, tangent) in enumerate(zip(geometry_points, tangents)):
+        if lateral is None or vertical is None:
+            projected_lateral = _vector_sub(preferred_lateral, _vector_scale(tangent, _vector_dot(preferred_lateral, tangent)))
+            if _vector_length(projected_lateral) <= 1e-6:
+                reference = _choose_frame_reference(tangent)
+                projected_lateral = _vector_cross(reference, tangent)
+            lateral = _vector_normalize(projected_lateral)
+            vertical = _vector_normalize(_vector_cross(tangent, lateral))
         else:
-            flatten_t = (distances[point_index] - wedge_start_distance) / max(1e-9, original_length - wedge_start_distance)
+            projected_lateral = _vector_sub(lateral, _vector_scale(tangent, _vector_dot(lateral, tangent)))
+            if _vector_length(projected_lateral) <= 1e-6:
+                projected_preferred = _vector_sub(preferred_lateral, _vector_scale(tangent, _vector_dot(preferred_lateral, tangent)))
+                if _vector_length(projected_preferred) > 1e-6:
+                    projected_lateral = projected_preferred
+                else:
+                    reference = _choose_frame_reference(tangent)
+                    projected_lateral = _vector_cross(reference, tangent)
+            lateral = _vector_normalize(projected_lateral)
+            vertical = _vector_normalize(_vector_cross(tangent, lateral))
+
+        if distances[point_index] <= wedge_start_distance:
+            distance_flatten_t = 0.0
+        elif distances[point_index] >= original_length:
+            distance_flatten_t = 1.0
+        else:
+            wedge_progress_t = (distances[point_index] - wedge_start_distance) / max(1e-9, original_length - wedge_start_distance)
+            if wedge_progress_t <= flatten_distance_start_ratio:
+                distance_flatten_t = 0.0
+            else:
+                distance_flatten_t = (wedge_progress_t - flatten_distance_start_ratio) / max(1e-9, 1.0 - flatten_distance_start_ratio)
+        tangent_parallel_t = math.hypot(tangent[0], tangent[1])
+        if tangent_parallel_t <= parallel_start:
+            angle_flatten_t = 0.0
+        elif tangent_parallel_t >= parallel_full:
+            angle_flatten_t = 1.0
+        else:
+            angle_flatten_t = (tangent_parallel_t - parallel_start) / max(1e-9, parallel_full - parallel_start)
+        flatten_t = max(0.0, min(1.0, distance_flatten_t * angle_flatten_t))
         width_radius = wire_radius_mm + ((width_end_radius - wire_radius_mm) * flatten_t)
-        height_radius = wire_radius_mm + ((height_end_radius - wire_radius_mm) * min(1.0, flatten_t * 1.35))
+        height_radius = wire_radius_mm + ((height_end_radius - wire_radius_mm) * flatten_t)
         if flatten_t >= 0.999:
             width_radius = width_end_radius
             height_radius = height_end_radius
-        desired_center_z = leadframe_top_z + LEADFRAME_CONTACT_CLEARANCE_MM + height_radius
+        desired_center_z = leadframe_top_z + wire_contact_clearance_mm + height_radius
         blended_center = (
             center[0],
             center[1],
@@ -1034,6 +1132,61 @@ def _build_flattened_terminal_mesh(
     )
 
 
+def _build_swept_rect_mesh(
+    points: list[tuple[float, float, float]],
+    *,
+    width_mm: float,
+    thickness_mm: float,
+    side_axis_xy: tuple[float, float],
+) -> trimesh.Trimesh | None:
+    if len(points) < 2:
+        return None
+    anchor_x_mm, anchor_y_mm, _anchor_z_mm = points[0]
+    outward_axis_xy: tuple[float, float] | None = None
+    for start_point, end_point in zip(points[:-1], points[1:]):
+        outward_axis_xy = _normalize_2d((end_point[0] - start_point[0], end_point[1] - start_point[1]))
+        if outward_axis_xy is not None:
+            break
+    if outward_axis_xy is None:
+        outward_axis_xy = (1.0, 0.0)
+    local_path_points = [
+        (
+            ((point_xyz[0] - anchor_x_mm) * outward_axis_xy[0]) + ((point_xyz[1] - anchor_y_mm) * outward_axis_xy[1]),
+            point_xyz[2],
+        )
+        for point_xyz in points
+    ]
+    try:
+        profile_polygon = _build_stroked_path_polygon(local_path_points, thickness_mm)
+    except Exception:
+        return None
+    side_axis = _vector_normalize((side_axis_xy[0], side_axis_xy[1], 0.0))
+    half_width_mm = width_mm / 2.0
+    polygon_vertex_count = len(profile_polygon)
+    vertices: list[list[float]] = []
+    for side_offset_mm in (-half_width_mm, half_width_mm):
+        for outward_mm, z_mm in profile_polygon:
+            vertices.append([
+                anchor_x_mm + (outward_axis_xy[0] * outward_mm) + (side_axis[0] * side_offset_mm),
+                anchor_y_mm + (outward_axis_xy[1] * outward_mm) + (side_axis[1] * side_offset_mm),
+                z_mm,
+            ])
+    faces: list[list[int]] = []
+    top_triangles = _triangulate_polygon(profile_polygon)
+    for a_index, b_index, c_index in top_triangles:
+        faces.append([a_index, c_index, b_index])
+        faces.append([a_index + polygon_vertex_count, b_index + polygon_vertex_count, c_index + polygon_vertex_count])
+    for edge_index in range(polygon_vertex_count):
+        next_index = (edge_index + 1) % polygon_vertex_count
+        near_a = edge_index
+        near_b = next_index
+        far_a = edge_index + polygon_vertex_count
+        far_b = next_index + polygon_vertex_count
+        faces.append([near_a, far_a, far_b])
+        faces.append([near_a, far_b, near_b])
+    return _ensure_outward_normals(trimesh.Trimesh(vertices=vertices, faces=faces, process=False))
+
+
 def _default_wire_profile(connection_id: str, leg_data: dict[str, object], die_data: dict[str, object]) -> dict[str, object]:
     return {
         "connection_id": connection_id,
@@ -1061,30 +1214,32 @@ def _default_wire_profile(connection_id: str, leg_data: dict[str, object], die_d
 def _wire_connections_from_payload(payload: dict) -> list[dict[str, object]]:
     leg_markers = []
     leadframe_top_z = max(0.05, _payload_float(payload, "thickness_z_mm", 0.2))
+    wire_contact_clearance_mm = max(0.0, _payload_float(payload, "wire_contact_clearance_mm", LEADFRAME_CONTACT_CLEARANCE_MM))
+    die_clearance_mm = max(0.0, _payload_float(payload, "die_clearance_mm", DIE_CLEARANCE_MM))
     for region in _bond_end_region_centers_from_payload(payload):
         center_x_mm, center_y_mm = region["center_mm"]
         leg_markers.append(
             {
                 **region,
                 "center_xy": (center_x_mm, center_y_mm),
-                "anchor_xyz": (center_x_mm, center_y_mm, leadframe_top_z + LEADFRAME_CONTACT_CLEARANCE_MM),
+                "anchor_xyz": (center_x_mm, center_y_mm, leadframe_top_z + wire_contact_clearance_mm),
             }
         )
     die_regions = []
-    die_top_z = max(0.05, _payload_float(payload, "thickness_z_mm", 0.2)) + DIE_CLEARANCE_MM + max(0.02, _payload_float(payload, "silicon_die_thickness_mm", 0.15))
+    die_top_z = max(0.05, _payload_float(payload, "thickness_z_mm", 0.2)) + die_clearance_mm + max(0.02, _payload_float(payload, "silicon_die_thickness_mm", 0.15))
     for region in _bond_start_region_centers_from_payload(payload):
         center_x_mm, center_y_mm = region["center_mm"]
         die_regions.append(
             {
                 **region,
                 "center_xy": (center_x_mm, center_y_mm),
-                "anchor_xyz": (center_x_mm, center_y_mm, die_top_z + LEADFRAME_CONTACT_CLEARANCE_MM),
+                "anchor_xyz": (center_x_mm, center_y_mm, die_top_z + wire_contact_clearance_mm),
             }
         )
 
     resolved_leg_markers = _clockwise_indexed_items(leg_markers)
     resolved_die_regions = _clockwise_indexed_items(die_regions)
-    pairs = _pair_nearest_leg_regions(resolved_leg_markers, resolved_die_regions)
+    pairs = _pair_side_ordered_regions(resolved_leg_markers, resolved_die_regions)
     existing_profiles_by_id = {}
     wire_profiles_payload = payload.get("wire_profiles", [])
     if isinstance(wire_profiles_payload, list):
@@ -1172,13 +1327,6 @@ def _wire_assembly_meshes_from_payload(payload: dict, *, solid_for_boolean: bool
         wedge_thickness_mm = max(0.005, _payload_float(wire_profile, "wedge_bond_thickness_mm", 0.02))
         terminal_length_mm = max(wedge_approach_run_mm, wedge_length_mm * 0.75)
         head_points, terminal_points = _split_polyline_at_tail_distance(path_points, terminal_length_mm)
-        wire_mesh = _build_swept_tube_mesh(
-            head_points,
-            wire_radius_mm,
-            max(8, tube_side_count),
-            cap_start=solid_for_boolean,
-            cap_end=solid_for_boolean,
-        )
 
         terminal_start = terminal_points[0]
         terminal_end = terminal_points[-1]
@@ -1191,8 +1339,9 @@ def _wire_assembly_meshes_from_payload(payload: dict, *, solid_for_boolean: bool
             lateral_axis_xy = (-approach_dy / approach_length, approach_dx / approach_length)
         else:
             lateral_axis_xy = (1.0, 0.0)
-        terminal_mesh = _build_flattened_terminal_mesh(
-            terminal_points,
+
+        continuous_wire_mesh = _build_flattened_terminal_mesh(
+            path_points,
             wire_radius_mm=wire_radius_mm,
             wedge_width_mm=wedge_width_mm,
             wedge_thickness_mm=wedge_thickness_mm,
@@ -1200,17 +1349,18 @@ def _wire_assembly_meshes_from_payload(payload: dict, *, solid_for_boolean: bool
             wedge_tail_mm=max(0.0, _payload_float(wire_profile, "wedge_tail_mm", 0.0)),
             side_count=max(8, tube_side_count),
             leadframe_top_z=max(0.05, _payload_float(payload, "thickness_z_mm", 0.2)),
+            wire_contact_clearance_mm=max(0.0, _payload_float(payload, "wire_contact_clearance_mm", LEADFRAME_CONTACT_CLEARANCE_MM)),
             lateral_axis_xy=lateral_axis_xy,
             cap_start=solid_for_boolean,
         )
-
         component_meshes = [ball_mesh]
-        if wire_mesh is not None:
-            component_meshes.append(wire_mesh)
-        if terminal_mesh is not None:
-            component_meshes.append(terminal_mesh)
+        if continuous_wire_mesh is not None:
+            component_meshes.append(continuous_wire_mesh)
         if solid_for_boolean:
-            bond_assembly_meshes.append(_ensure_outward_normals(trimesh.util.concatenate(component_meshes)))
+            merged_bond_mesh = _union_meshes(component_meshes)
+            if merged_bond_mesh is None:
+                merged_bond_mesh = _ensure_outward_normals(trimesh.util.concatenate(component_meshes))
+            bond_assembly_meshes.append(merged_bond_mesh)
         else:
             bond_assembly_meshes.append(_make_face_winding_consistent(trimesh.util.concatenate(component_meshes)))
 
@@ -1222,6 +1372,40 @@ def _wire_meshes_from_payload(payload: dict) -> list[tuple[str, trimesh.Trimesh,
     if not bond_assembly_meshes:
         return []
     return [("Bond Assemblies", _make_face_winding_consistent(trimesh.util.concatenate(bond_assembly_meshes)), "#2563eb")]
+
+
+def _leg_meshes_from_payload(payload: dict) -> list[tuple[str, trimesh.Trimesh, str]]:
+    thickness_mm = max(0.05, _payload_float(payload, "thickness_z_mm", 0.2))
+    width_mm = max(0.05, _payload_float(payload, "leadframe_path_width_mm", 0.8))
+    profile_points_mm = _leg_profile_points_from_payload(payload, thickness_mm)
+    if len(profile_points_mm) < 2:
+        return []
+    leg_meshes: list[trimesh.Trimesh] = []
+    for spec in _lead_leg_specs_from_payload(payload):
+        anchor_x_mm, anchor_y_mm, anchor_z_mm = spec["anchor_xyz"]
+        outward_xy = spec["outward_xy"]
+        side_xy = spec["side_xy"]
+        world_points = [
+            (
+                anchor_x_mm + (outward_xy[0] * point_u_mm),
+                anchor_y_mm + (outward_xy[1] * point_u_mm),
+                point_z_mm,
+            )
+            for point_u_mm, point_z_mm in profile_points_mm
+        ]
+        if world_points:
+            world_points[0] = (anchor_x_mm, anchor_y_mm, anchor_z_mm)
+        leg_mesh = _build_swept_rect_mesh(
+            world_points,
+            width_mm=width_mm,
+            thickness_mm=thickness_mm,
+            side_axis_xy=side_xy,
+        )
+        if leg_mesh is not None:
+            leg_meshes.append(leg_mesh)
+    if not leg_meshes:
+        return []
+    return [("Legs", _ensure_outward_normals(trimesh.util.concatenate(leg_meshes)), "#7c3aed")]
 
 
 def _scaled_mesh_about_center(mesh: trimesh.Trimesh, scale_percent: float) -> trimesh.Trimesh | None:
@@ -1247,8 +1431,11 @@ def _subtract_mesh_from_encapsulation(
     valid_meshes = [mesh for mesh in subtract_meshes if isinstance(mesh, trimesh.Trimesh) and len(mesh.faces)]
     if not valid_meshes:
         return encapsulation_mesh
+    subtract_cutter_mesh = _union_meshes(valid_meshes)
+    if subtract_cutter_mesh is None or not len(subtract_cutter_mesh.faces):
+        return encapsulation_mesh
     try:
-        result = trimesh.boolean.difference([encapsulation_mesh, *valid_meshes], engine="manifold")
+        result = trimesh.boolean.difference([encapsulation_mesh, subtract_cutter_mesh], engine="manifold")
         if isinstance(result, trimesh.Trimesh) and len(result.faces):
             return _ensure_outward_normals(result)
     except Exception:
@@ -1256,11 +1443,107 @@ def _subtract_mesh_from_encapsulation(
     return encapsulation_mesh
 
 
+def _build_encapsulation_base_mesh_from_payload(payload: dict) -> trimesh.Trimesh | None:
+    encapsulation_width_mm, encapsulation_length_mm, negative_z_mm, positive_z_mm = _encapsulation_dimensions_from_payload(payload)
+    encapsulation_height_mm = negative_z_mm + positive_z_mm
+    if encapsulation_height_mm <= 1e-9:
+        return None
+    encapsulation_mesh = _ensure_outward_normals(
+        trimesh.creation.box(extents=(encapsulation_width_mm, encapsulation_length_mm, encapsulation_height_mm))
+    )
+    encapsulation_mesh.apply_transform(_translation_matrix(0.0, 0.0, (positive_z_mm - negative_z_mm) / 2.0))
+    return encapsulation_mesh
+
+
+def _union_meshes(meshes: list[trimesh.Trimesh]) -> trimesh.Trimesh | None:
+    valid_meshes = [mesh for mesh in meshes if isinstance(mesh, trimesh.Trimesh) and len(mesh.faces)]
+    if not valid_meshes:
+        return None
+    if len(valid_meshes) == 1:
+        return _ensure_outward_normals(valid_meshes[0].copy())
+    try:
+        result = trimesh.boolean.union(valid_meshes, engine="manifold")
+        if isinstance(result, trimesh.Trimesh) and len(result.faces):
+            return _ensure_outward_normals(result)
+    except Exception:
+        pass
+    return _ensure_outward_normals(trimesh.util.concatenate(valid_meshes))
+
+
+def _build_export_meshes_from_payload(payload: dict) -> dict[str, trimesh.Trimesh]:
+    thickness_mm = max(0.05, _payload_float(payload, "thickness_z_mm", 0.2))
+    width_mm = max(0.05, _payload_float(payload, "leadframe_path_width_mm", 0.8))
+    die_clearance_mm = max(0.0, _payload_float(payload, "die_clearance_mm", DIE_CLEARANCE_MM))
+    export_meshes: dict[str, trimesh.Trimesh] = {}
+
+    die_frame_size_mm = _die_square_size_from_payload(payload)
+    centered_die_frame_mesh = _ensure_outward_normals(trimesh.creation.box(extents=(die_frame_size_mm, die_frame_size_mm, thickness_mm)))
+    centered_die_frame_mesh.apply_transform(_translation_matrix(0.0, 0.0, thickness_mm / 2.0))
+
+    silicon_die_width_mm, silicon_die_height_mm = _silicon_die_dimensions_from_payload(payload)
+    silicon_die_thickness_mm = max(0.02, _payload_float(payload, "silicon_die_thickness_mm", 0.15))
+    silicon_die_mesh = _ensure_outward_normals(trimesh.creation.box(extents=(silicon_die_width_mm, silicon_die_height_mm, silicon_die_thickness_mm)))
+    silicon_die_mesh.apply_transform(_translation_matrix(0.0, 0.0, thickness_mm + die_clearance_mm + (silicon_die_thickness_mm / 2.0)))
+
+    leadframe_path_meshes: list[trimesh.Trimesh] = []
+    for path_payload in payload.get("saved_paths_mm", []):
+        if not isinstance(path_payload, list):
+            continue
+        path_mm = [tuple(point) for point in path_payload if isinstance(point, (list, tuple)) and len(point) == 2]
+        if len(path_mm) < 2:
+            continue
+        try:
+            stroked_polygon_mm = _build_stroked_path_polygon(path_mm, width_mm)
+            leadframe_path_meshes.append(_extrude_closed_polygon(stroked_polygon_mm, thickness_mm))
+        except Exception:
+            continue
+    leadframe_paths_mesh = _union_meshes(leadframe_path_meshes)
+
+    leg_mesh_items = _leg_meshes_from_payload(payload)
+    legs_mesh = _union_meshes([mesh for _label, mesh, _color in leg_mesh_items])
+
+    leadframe_group_mesh = _union_meshes(
+        [mesh for mesh in (centered_die_frame_mesh, leadframe_paths_mesh, legs_mesh) if mesh is not None]
+    )
+    if leadframe_group_mesh is not None:
+        export_meshes["lead_frame"] = leadframe_group_mesh
+
+    wire_boolean_meshes = _wire_assembly_meshes_from_payload(payload, solid_for_boolean=True)
+    wire_group_mesh = _union_meshes(wire_boolean_meshes)
+    if wire_group_mesh is not None:
+        export_meshes["wire"] = wire_group_mesh
+
+    export_meshes["silicon_die"] = _ensure_outward_normals(silicon_die_mesh)
+
+    scale_percent = max(0.0, _payload_float(payload, "outer_model_scale_percent", 0.1))
+    enlarged_internal_meshes: list[trimesh.Trimesh] = []
+    for base_mesh in [mesh for mesh in (leadframe_group_mesh, wire_group_mesh, silicon_die_mesh) if mesh is not None]:
+        scaled_mesh = _scaled_mesh_about_center(base_mesh.copy(), scale_percent)
+        enlarged_internal_meshes.append(scaled_mesh if scaled_mesh is not None else base_mesh.copy())
+
+    encapsulation_mesh = _build_encapsulation_base_mesh_from_payload(payload)
+    if encapsulation_mesh is not None:
+        export_meshes["encapsulation"] = _subtract_mesh_from_encapsulation(encapsulation_mesh, enlarged_internal_meshes)
+
+    everything_meshes = [mesh for mesh in (
+        export_meshes.get("lead_frame"),
+        export_meshes.get("wire"),
+        export_meshes.get("encapsulation"),
+        export_meshes.get("silicon_die"),
+    ) if mesh is not None]
+    if everything_meshes:
+        export_meshes["all"] = _ensure_outward_normals(trimesh.util.concatenate(everything_meshes))
+    return export_meshes
+
+
 def build_next_step_meshes_from_payload(payload: dict) -> list[tuple[str, trimesh.Trimesh, str]]:
     thickness_mm = max(0.05, _payload_float(payload, "thickness_z_mm", 0.2))
     width_mm = max(0.05, _payload_float(payload, "leadframe_path_width_mm", 0.8))
     meshes: list[tuple[str, trimesh.Trimesh, str]] = []
     subtract_reference_meshes: list[trimesh.Trimesh] = []
+    die_clearance_mm = max(0.0, _payload_float(payload, "die_clearance_mm", DIE_CLEARANCE_MM))
+    helper_region_hover_mm = max(0.0, _payload_float(payload, "helper_region_hover_mm", HELPER_REGION_HOVER_MM))
+    helper_plane_thickness_mm = 0.0002
 
     die_size_mm = _die_square_size_from_payload(payload)
     die_mesh = _ensure_outward_normals(trimesh.creation.box(extents=(die_size_mm, die_size_mm, thickness_mm)))
@@ -1270,7 +1553,7 @@ def build_next_step_meshes_from_payload(payload: dict) -> list[tuple[str, trimes
     silicon_die_width_mm, silicon_die_height_mm = _silicon_die_dimensions_from_payload(payload)
     silicon_die_thickness_mm = max(0.02, _payload_float(payload, "silicon_die_thickness_mm", 0.15))
     silicon_die_mesh = _ensure_outward_normals(trimesh.creation.box(extents=(silicon_die_width_mm, silicon_die_height_mm, silicon_die_thickness_mm)))
-    silicon_die_mesh.apply_transform(_translation_matrix(0.0, 0.0, thickness_mm + DIE_CLEARANCE_MM + (silicon_die_thickness_mm / 2.0)))
+    silicon_die_mesh.apply_transform(_translation_matrix(0.0, 0.0, thickness_mm + die_clearance_mm + (silicon_die_thickness_mm / 2.0)))
     meshes.append(("Silicon Die", silicon_die_mesh, "#232323"))
 
     path_meshes: list[trimesh.Trimesh] = []
@@ -1291,6 +1574,31 @@ def build_next_step_meshes_from_payload(payload: dict) -> list[tuple[str, trimes
         meshes.append(("Lead Frame Paths", leadframe_paths_mesh, "#14532d"))
         subtract_reference_meshes.append(leadframe_paths_mesh.copy())
 
+    bond_end_region_size_mm = max(0.05, _payload_float(payload, "bond_end_region_size_mm", 0.2))
+    bond_end_meshes: list[trimesh.Trimesh] = []
+    for region in _bond_end_region_centers_from_payload(payload):
+        center_x_mm, center_y_mm = region["center_mm"]
+        mesh = _ensure_outward_normals(
+            trimesh.creation.box(extents=(bond_end_region_size_mm, bond_end_region_size_mm, helper_plane_thickness_mm))
+        )
+        mesh.apply_transform(_translation_matrix(center_x_mm, center_y_mm, thickness_mm + helper_region_hover_mm + (helper_plane_thickness_mm / 2.0)))
+        bond_end_meshes.append(mesh)
+    if bond_end_meshes:
+        meshes.append(("Bond End Regions", _ensure_outward_normals(trimesh.util.concatenate(bond_end_meshes)), "#2563eb"))
+
+    bond_start_region_size_mm = max(0.05, _payload_float(payload, "bond_start_region_size_mm", 0.2))
+    bond_start_meshes: list[trimesh.Trimesh] = []
+    bond_start_z_mm = thickness_mm + die_clearance_mm + silicon_die_thickness_mm + helper_region_hover_mm + (helper_plane_thickness_mm / 2.0)
+    for region in _bond_start_region_centers_from_payload(payload):
+        center_x_mm, center_y_mm = region["center_mm"]
+        mesh = _ensure_outward_normals(
+            trimesh.creation.box(extents=(bond_start_region_size_mm, bond_start_region_size_mm, helper_plane_thickness_mm))
+        )
+        mesh.apply_transform(_translation_matrix(center_x_mm, center_y_mm, bond_start_z_mm))
+        bond_start_meshes.append(mesh)
+    if bond_start_meshes:
+        meshes.append(("Bond Start Regions", _ensure_outward_normals(trimesh.util.concatenate(bond_start_meshes)), "#7c3aed"))
+
     if int(payload.get("current_step_index", 0)) >= 2:
         meshes.extend(_wire_meshes_from_payload(payload))
         subtract_reference_meshes.extend(_wire_assembly_meshes_from_payload(payload, solid_for_boolean=True))
@@ -1308,15 +1616,12 @@ def build_next_step_meshes_from_payload(payload: dict) -> list[tuple[str, trimes
             meshes.append(("Scaled Outer Model", _ensure_outward_normals(trimesh.util.concatenate(scaled_reference_meshes)), "#d97706"))
         subtract_reference_meshes = scaled_reference_meshes
     if int(payload.get("current_step_index", 0)) >= 4:
-        encapsulation_width_mm, encapsulation_length_mm, negative_z_mm, positive_z_mm = _encapsulation_dimensions_from_payload(payload)
-        encapsulation_height_mm = negative_z_mm + positive_z_mm
-        if encapsulation_height_mm > 1e-9:
-            encapsulation_mesh = _ensure_outward_normals(
-                trimesh.creation.box(extents=(encapsulation_width_mm, encapsulation_length_mm, encapsulation_height_mm))
-            )
-            encapsulation_mesh.apply_transform(_translation_matrix(0.0, 0.0, (positive_z_mm - negative_z_mm) / 2.0))
+        encapsulation_mesh = _build_encapsulation_base_mesh_from_payload(payload)
+        if encapsulation_mesh is not None:
             encapsulation_mesh = _subtract_mesh_from_encapsulation(encapsulation_mesh, subtract_reference_meshes)
             meshes.append(("Encapsulation", encapsulation_mesh, "#c08457"))
+    if int(payload.get("current_step_index", 0)) >= 5:
+        meshes.extend(_leg_meshes_from_payload(payload))
     return meshes
 
 
@@ -1362,6 +1667,8 @@ class IcChipGeneratorNewViewer:
         self.last_payload: dict = {}
         self.show_normals = False
         self.normal_button = None
+        self.visibility_buttons: dict[str, object] = {}
+        self.viewer_visibility_overrides: dict[str, bool] = {}
         self.last_signature: tuple | None = None
 
     def _payload_signature(self, payload: dict) -> tuple:
@@ -1373,11 +1680,15 @@ class IcChipGeneratorNewViewer:
             payload.get("encapsulation_negative_extrusion_mm", 0.0),
             payload.get("encapsulation_positive_extrusion_mm", 0.0),
             tuple(sorted(_viewer_visibility_from_payload(payload).items())),
+            tuple(tuple(point) for point in payload.get("leg_profile_mm", []) if isinstance(point, (list, tuple)) and len(point) == 2),
             payload.get("outline_x_mm", 0.0),
             payload.get("outline_y_mm", 0.0),
             payload.get("thickness_z_mm", 0.0),
             payload.get("leadframe_path_width_mm", 0.0),
             payload.get("die_compartment_square_size_mm", 0.0),
+            payload.get("die_clearance_mm", DIE_CLEARANCE_MM),
+            payload.get("wire_contact_clearance_mm", LEADFRAME_CONTACT_CLEARANCE_MM),
+            payload.get("helper_region_hover_mm", HELPER_REGION_HOVER_MM),
             payload.get("silicon_die_width_mm", 0.0),
             payload.get("silicon_die_height_mm", 0.0),
             payload.get("silicon_die_thickness_mm", 0.0),
@@ -1422,6 +1733,7 @@ class IcChipGeneratorNewViewer:
         try:
             meshes = build_next_step_meshes_from_payload(payload)
             visibility_by_label = _viewer_visibility_from_payload(payload)
+            visibility_by_label.update(self.viewer_visibility_overrides)
             if len(meshes) > 2:
                 for label, mesh, color in meshes:
                     if not visibility_by_label.get(label, True):
@@ -1462,6 +1774,54 @@ class IcChipGeneratorNewViewer:
             self._build_scene(self.last_payload)
             self.last_signature = self._payload_signature(self.last_payload)
 
+    def _make_visibility_toggle(self, label: str):
+        def _toggle(*_args) -> None:
+            current_payload_visibility = _viewer_visibility_from_payload(self.last_payload or {})
+            current_value = self.viewer_visibility_overrides.get(label, current_payload_visibility.get(label, True))
+            self.viewer_visibility_overrides[label] = not current_value
+            button = self.visibility_buttons.get(label)
+            if button is not None:
+                button.switch()
+            if self.last_payload:
+                self._build_scene(self.last_payload)
+                self.last_signature = self._payload_signature(self.last_payload)
+        return _toggle
+
+    def _ensure_visibility_buttons(self, payload: dict) -> None:
+        if self.visibility_buttons:
+            return
+        labels = [
+            "Lead Frame Paths",
+            "Centered Die Compartment",
+            "Silicon Die",
+            "Bond End Regions",
+            "Bond Start Regions",
+            "Bond Assemblies",
+            "Scaled Outer Model",
+            "Encapsulation",
+            "Legs",
+        ]
+        payload_visibility = _viewer_visibility_from_payload(payload)
+        x_pos = 0.78
+        y_start = 0.13
+        y_step = 0.055
+        for index, label in enumerate(labels):
+            initial_on = payload_visibility.get(label, True)
+            self.viewer_visibility_overrides.setdefault(label, initial_on)
+            button = self.plotter.add_button(
+                self._make_visibility_toggle(label),
+                pos=(x_pos, y_start + (index * y_step)),
+                states=(f"Hide {label}", f"Show {label}"),
+                c=("white", "white"),
+                bc=("#1f6b3a", "#6b1f1f"),
+                font="Courier",
+                size=12,
+                bold=False,
+            )
+            self.visibility_buttons[label] = button
+            if not initial_on:
+                button.switch()
+
     def _on_timer(self, _event) -> None:
         payload = read_viewer_payload(self.payload_path)
         if not payload:
@@ -1495,6 +1855,7 @@ class IcChipGeneratorNewViewer:
             size=16,
             bold=True,
         )
+        self._ensure_visibility_buttons(payload)
         self.plotter.show(self.info, zoom="tight", interactive=False)
         self._build_scene(payload)
         self.last_signature = self._payload_signature(payload)
@@ -1543,6 +1904,9 @@ class IcChipGeneratorNewApp:
         self.silicon_die_width_var = tk.DoubleVar(value=2.4)
         self.silicon_die_height_var = tk.DoubleVar(value=2.4)
         self.silicon_die_thickness_var = tk.DoubleVar(value=0.15)
+        self.die_clearance_var = tk.DoubleVar(value=DIE_CLEARANCE_MM)
+        self.wire_contact_clearance_var = tk.DoubleVar(value=LEADFRAME_CONTACT_CLEARANCE_MM)
+        self.helper_region_hover_var = tk.DoubleVar(value=HELPER_REGION_HOVER_MM)
         self.bond_end_region_size_var = tk.DoubleVar(value=0.2)
         self.bond_end_region_offset_var = tk.DoubleVar(value=0.0)
         self.bond_start_region_size_var = tk.DoubleVar(value=0.2)
@@ -1554,14 +1918,18 @@ class IcChipGeneratorNewApp:
         self.bond_start_right_count_var = tk.IntVar(value=2)
         self.project_name_var = tk.StringVar(value="untitled_chip")
         self.status_var = tk.StringVar(value="Set the leadframe size and side counts, then click a guide midpoint to start drawing.")
-        self.step_titles = ["1. Lead Frame Design", "2. Silicon Die And Bond Regions", "3. Wire Bonding", "4. Scaled Outer Model", "5. Encapsulation"]
+        self.step_titles = ["1. Lead Frame Design", "2. Silicon Die And Bond Regions", "3. Wire Bonding", "4. Scaled Outer Model", "5. Encapsulation", "6. Leg Design", "7. Export STLs"]
         self.step_index = 0
         self.current_project_dir = self._project_dir_for_name(self.project_name_var.get())
         self.viewer_process: subprocess.Popen | None = None
         self.saved_paths_mm: list[list[tuple[float, float]]] = []
+        self.selected_path_index: int | None = None
         self.current_path_mm: list[tuple[float, float]] = []
         self.preview_point_mm: tuple[float, float] | None = None
+        self.current_path_snap_angle_deg: float | None = None
         self.dragging_vertex: tuple[int, int] | None = None
+        self.pending_live_update_after_id: str | None = None
+        self.pending_live_refresh_wire_profiles = False
         self.wire_profiles: list[dict[str, object]] = []
         self.loading_wire_profile = False
         self.syncing_wire_profiles = False
@@ -1586,11 +1954,23 @@ class IcChipGeneratorNewApp:
         self.encapsulation_negative_extrusion_var = tk.DoubleVar(value=0.0)
         self.encapsulation_positive_extrusion_var = tk.DoubleVar(value=0.6)
         self.show_leadframe_paths_var = tk.BooleanVar(value=True)
-        self.show_centered_die_compartment_var = tk.BooleanVar(value=False)
+        self.show_centered_die_compartment_var = tk.BooleanVar(value=True)
         self.show_silicon_die_var = tk.BooleanVar(value=True)
+        self.show_bond_end_regions_var = tk.BooleanVar(value=True)
+        self.show_bond_start_regions_var = tk.BooleanVar(value=True)
         self.show_bond_assemblies_var = tk.BooleanVar(value=True)
         self.show_scaled_outer_model_var = tk.BooleanVar(value=True)
         self.show_encapsulation_var = tk.BooleanVar(value=True)
+        self.show_legs_var = tk.BooleanVar(value=True)
+        self.export_lead_frame_var = tk.BooleanVar(value=True)
+        self.export_wire_var = tk.BooleanVar(value=True)
+        self.export_encapsulation_var = tk.BooleanVar(value=True)
+        self.export_silicon_die_var = tk.BooleanVar(value=True)
+        self.export_all_var = tk.BooleanVar(value=True)
+        self.leg_canvas_scale_px_per_mm = 42.0
+        self.leg_profile_points_mm: list[tuple[float, float]] = []
+        self.leg_dragging_index: int | None = None
+        self.leg_alt_override = False
         self.rand_ball_radius_mean_var = tk.DoubleVar(value=0.06)
         self.rand_ball_radius_std_var = tk.DoubleVar(value=0.01)
         self.rand_ball_height_mean_var = tk.DoubleVar(value=0.08)
@@ -1613,6 +1993,23 @@ class IcChipGeneratorNewApp:
         self.rand_wedge_approach_std_var = tk.DoubleVar(value=0.02)
         self.rand_wedge_tail_mean_var = tk.DoubleVar(value=0.0)
         self.rand_wedge_tail_std_var = tk.DoubleVar(value=0.02)
+        self.wire_editor_vars = (
+            self.wire_arc_height_var,
+            self.wire_arc_xy_noise_var,
+            self.wire_rise_z_var,
+            self.wire_diameter_var,
+            self.wire_point_spacing_var,
+            self.wire_tube_side_count_var,
+            self.ball_bond_diameter_var,
+            self.ball_bond_length_var,
+            self.ball_bond_revolution_steps_var,
+            self.wedge_bond_length_var,
+            self.wedge_bond_width_var,
+            self.wedge_bond_thickness_var,
+            self.wedge_approach_run_var,
+            self.wedge_tail_var,
+        )
+        self.leg_profile_points_mm = _leg_profile_points_from_payload({}, max(0.05, self._safe_float(self.thickness_z_var, 0.2)))
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -1744,6 +2141,7 @@ class IcChipGeneratorNewApp:
         ttk.Button(help_box, text="Undo Point", command=self._undo_point).pack(fill="x", pady=(8, 0))
         ttk.Button(help_box, text="Mirror Horizontal", command=self._mirror_paths_horizontal).pack(fill="x", pady=(8, 0))
         ttk.Button(help_box, text="Mirror Vertical", command=self._mirror_paths_vertical).pack(fill="x", pady=(8, 0))
+        ttk.Button(help_box, text="Rotate Copy 90 x3", command=self._rotate_copy_paths_quadrants).pack(fill="x", pady=(8, 0))
         ttk.Button(help_box, text="Clear Current Path", command=self._clear_current_path).pack(fill="x", pady=(8, 0))
         ttk.Button(help_box, text="Clear Saved Paths", command=self._clear_saved_paths).pack(fill="x", pady=(8, 0))
 
@@ -1762,7 +2160,7 @@ class IcChipGeneratorNewApp:
         ).pack(anchor="w")
         die_box = ttk.LabelFrame(step2_box, text="Silicon Die", padding=8)
         die_box.pack(fill="x", pady=(10, 0))
-        ttk.Label(die_box, text="The die is centered over the compartment and held 0.001 mm above the leadframe.").pack(anchor="w")
+        ttk.Label(die_box, text="The die, wire lift, and helper-region hover can be tuned below as epsilon clearances.").pack(anchor="w")
         ttk.Label(die_box, text="Die Width / Height (mm)").pack(anchor="w", pady=(8, 0))
         die_xy_row = ttk.Frame(die_box)
         die_xy_row.pack(fill="x", pady=(4, 0))
@@ -1770,6 +2168,15 @@ class IcChipGeneratorNewApp:
         ttk.Entry(die_xy_row, textvariable=self.silicon_die_height_var, width=8).pack(side="left", fill="x", expand=True, padx=6)
         ttk.Label(die_box, text="Die Thickness (mm)").pack(anchor="w", pady=(8, 0))
         ttk.Entry(die_box, textvariable=self.silicon_die_thickness_var).pack(fill="x", pady=(2, 0))
+
+        clearance_box = ttk.LabelFrame(step2_box, text="Part Epsilon Clearances", padding=8)
+        clearance_box.pack(fill="x", pady=(10, 0))
+        ttk.Label(clearance_box, text="Die Above Leadframe (mm)").pack(anchor="w")
+        ttk.Entry(clearance_box, textvariable=self.die_clearance_var).pack(fill="x", pady=(2, 0))
+        ttk.Label(clearance_box, text="Wire Above Contact Surface (mm)").pack(anchor="w", pady=(8, 0))
+        ttk.Entry(clearance_box, textvariable=self.wire_contact_clearance_var).pack(fill="x", pady=(2, 0))
+        ttk.Label(clearance_box, text="Bond Region Hover (mm)").pack(anchor="w", pady=(8, 0))
+        ttk.Entry(clearance_box, textvariable=self.helper_region_hover_var).pack(fill="x", pady=(2, 0))
 
         bond_end_box = ttk.LabelFrame(step2_box, text="Bond End Regions", padding=8)
         bond_end_box.pack(fill="x", pady=(10, 0))
@@ -1855,6 +2262,10 @@ class IcChipGeneratorNewApp:
         ttk.Label(wedge_box, text="Wedge Tail (mm)").pack(anchor="w", pady=(8, 0))
         ttk.Entry(wedge_box, textvariable=self.wedge_tail_var).pack(fill="x", pady=(2, 0))
 
+        inherit_box = ttk.Frame(step3_box)
+        inherit_box.pack(fill="x", pady=(10, 0))
+        ttk.Button(inherit_box, text="Inherit", command=self._inherit_wire_randomization_from_current).pack(fill="x")
+
         random_box = ttk.LabelFrame(step3_box, text="Randomize Wires", padding=8)
         random_box.pack(fill="x", pady=(10, 0))
 
@@ -1924,9 +2335,49 @@ class IcChipGeneratorNewApp:
         ttk.Checkbutton(visibility_box, text="Lead Frame Paths", variable=self.show_leadframe_paths_var).pack(anchor="w")
         ttk.Checkbutton(visibility_box, text="Centered Die Compartment", variable=self.show_centered_die_compartment_var).pack(anchor="w")
         ttk.Checkbutton(visibility_box, text="Silicon Die", variable=self.show_silicon_die_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Bond End Regions", variable=self.show_bond_end_regions_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Bond Start Regions", variable=self.show_bond_start_regions_var).pack(anchor="w")
         ttk.Checkbutton(visibility_box, text="Bond Assemblies", variable=self.show_bond_assemblies_var).pack(anchor="w")
         ttk.Checkbutton(visibility_box, text="Scaled Outer Model", variable=self.show_scaled_outer_model_var).pack(anchor="w")
         ttk.Checkbutton(visibility_box, text="Encapsulation", variable=self.show_encapsulation_var).pack(anchor="w")
+        ttk.Checkbutton(visibility_box, text="Legs", variable=self.show_legs_var).pack(anchor="w")
+
+        step6_section = ttk.Frame(left)
+        self.step_sections.append(step6_section)
+        step6_box = ttk.LabelFrame(step6_section, text="Step 6: Leg Design", padding=10)
+        step6_box.pack(fill="x", pady=(12, 0))
+        ttk.Label(
+            step6_box,
+            text="Draw one leg centerline in a side view. This profile is then placed onto every leadframe start point using each path's outward direction.",
+            wraplength=310,
+        ).pack(anchor="w")
+        ttk.Label(
+            step6_box,
+            text="Use the large canvas on the right for Step 6. Horizontal axis = outward from package, vertical axis = Z. The orange point is the fixed anchor on the leadframe.",
+            wraplength=310,
+        ).pack(anchor="w", pady=(6, 0))
+        leg_button_row = ttk.Frame(step6_box)
+        leg_button_row.pack(fill="x", pady=(10, 0))
+        ttk.Button(leg_button_row, text="Undo Leg Point", command=self._undo_leg_point).pack(side="left", fill="x", expand=True)
+        ttk.Button(leg_button_row, text="Clear Leg", command=self._clear_leg_profile).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        step7_section = ttk.Frame(left)
+        self.step_sections.append(step7_section)
+        step7_box = ttk.LabelFrame(step7_section, text="Step 7: Export STLs", padding=10)
+        step7_box.pack(fill="x", pady=(12, 0))
+        ttk.Label(
+            step7_box,
+            text="Choose which STL groups to export. Checked items will be written as separate STL files.",
+            wraplength=310,
+        ).pack(anchor="w")
+        export_check_box = ttk.LabelFrame(step7_box, text="Export These", padding=8)
+        export_check_box.pack(fill="x", pady=(10, 0))
+        ttk.Checkbutton(export_check_box, text="Lead Frame", variable=self.export_lead_frame_var).pack(anchor="w")
+        ttk.Checkbutton(export_check_box, text="Wire", variable=self.export_wire_var).pack(anchor="w")
+        ttk.Checkbutton(export_check_box, text="Encapsulation", variable=self.export_encapsulation_var).pack(anchor="w")
+        ttk.Checkbutton(export_check_box, text="Silicon Die", variable=self.export_silicon_die_var).pack(anchor="w")
+        ttk.Checkbutton(export_check_box, text="ALL", variable=self.export_all_var).pack(anchor="w")
+        ttk.Button(step7_box, text="Export Selected STLs", command=self._export_final_stls).pack(fill="x", pady=(12, 0))
 
         ttk.Label(left, textvariable=self.status_var, wraplength=320).pack(anchor="w", pady=(12, 0))
 
@@ -1957,6 +2408,10 @@ class IcChipGeneratorNewApp:
         self.canvas.bind("<MouseWheel>", self._on_zoom)
         self.canvas.bind("<Button-4>", self._on_zoom)
         self.canvas.bind("<Button-5>", self._on_zoom)
+        self.root.bind_all("<KeyPress-Alt_L>", self._on_alt_press, add="+")
+        self.root.bind_all("<KeyPress-Alt_R>", self._on_alt_press, add="+")
+        self.root.bind_all("<KeyRelease-Alt_L>", self._on_alt_release, add="+")
+        self.root.bind_all("<KeyRelease-Alt_R>", self._on_alt_release, add="+")
 
     def _bind_live_refresh(self) -> None:
         for variable in (
@@ -1979,6 +2434,9 @@ class IcChipGeneratorNewApp:
             self.silicon_die_width_var,
             self.silicon_die_height_var,
             self.silicon_die_thickness_var,
+            self.die_clearance_var,
+            self.wire_contact_clearance_var,
+            self.helper_region_hover_var,
             self.bond_end_region_size_var,
             self.bond_end_region_offset_var,
             self.bond_start_region_size_var,
@@ -2010,19 +2468,43 @@ class IcChipGeneratorNewApp:
             self.show_leadframe_paths_var,
             self.show_centered_die_compartment_var,
             self.show_silicon_die_var,
+            self.show_bond_end_regions_var,
+            self.show_bond_start_regions_var,
             self.show_bond_assemblies_var,
             self.show_scaled_outer_model_var,
             self.show_encapsulation_var,
+            self.show_legs_var,
+            self.export_lead_frame_var,
+            self.export_wire_var,
+            self.export_encapsulation_var,
+            self.export_silicon_die_var,
+            self.export_all_var,
         ):
-            variable.trace_add("write", self._on_live_value_change)
+            variable.trace_add("write", lambda *_args, _variable=variable: self._on_live_value_change(_variable))
 
-    def _on_live_value_change(self, *_args) -> None:
-        self._apply_wire_profile_editor()
-        if (self.step_index >= 2 or self.wire_profiles) and not self.syncing_wire_profiles:
+    def _schedule_live_update(self, *, refresh_wire_profiles: bool) -> None:
+        if refresh_wire_profiles:
+            self.pending_live_refresh_wire_profiles = True
+        if self.pending_live_update_after_id is not None:
+            self.root.after_cancel(self.pending_live_update_after_id)
+        self.pending_live_update_after_id = self.root.after(120, self._flush_live_update)
+
+    def _flush_live_update(self) -> None:
+        self.pending_live_update_after_id = None
+        self._ensure_leg_anchor_position()
+        if self.pending_live_refresh_wire_profiles and (self.step_index >= 2 or self.wire_profiles) and not self.syncing_wire_profiles:
             self._refresh_wire_profiles()
+        self.pending_live_refresh_wire_profiles = False
         self._redraw_canvas()
         self._autosave_project_files()
         self._push_viewer_payload()
+
+    def _on_live_value_change(self, changed_variable=None, *_args) -> None:
+        if self.loading_wire_profile or self.syncing_wire_profiles:
+            return
+        self._apply_wire_profile_editor()
+        refresh_wire_profiles = changed_variable not in self.wire_editor_vars
+        self._schedule_live_update(refresh_wire_profiles=refresh_wire_profiles)
 
     def _safe_float(self, variable: tk.Variable, fallback: float) -> float:
         try:
@@ -2120,12 +2602,26 @@ class IcChipGeneratorNewApp:
         viewer_visibility = payload.get("step5_viewer_visibility", {})
         if isinstance(viewer_visibility, dict):
             self.show_leadframe_paths_var.set(bool(viewer_visibility.get("lead_frame_paths", True)))
-            self.show_centered_die_compartment_var.set(bool(viewer_visibility.get("centered_die_compartment", False)))
-            self.show_silicon_die_var.set(bool(viewer_visibility.get("silicon_die", True)))
-            self.show_bond_assemblies_var.set(bool(viewer_visibility.get("bond_assemblies", True)))
-            self.show_scaled_outer_model_var.set(bool(viewer_visibility.get("scaled_outer_model", True)))
-            self.show_encapsulation_var.set(bool(viewer_visibility.get("encapsulation", True)))
+            self.show_centered_die_compartment_var.set(bool(viewer_visibility.get("centered_die_compartment", True)))
+            self.show_bond_end_regions_var.set(bool(viewer_visibility.get("bond_end_regions", True)))
+            self.show_bond_start_regions_var.set(bool(viewer_visibility.get("bond_start_regions", True)))
+        self.show_silicon_die_var.set(bool(viewer_visibility.get("silicon_die", True)))
+        self.show_bond_assemblies_var.set(bool(viewer_visibility.get("bond_assemblies", True)))
+        self.show_scaled_outer_model_var.set(bool(viewer_visibility.get("scaled_outer_model", True)))
+        self.show_encapsulation_var.set(bool(viewer_visibility.get("encapsulation", True)))
+        self.show_legs_var.set(bool(viewer_visibility.get("legs", True)))
+        export_selection = payload.get("step7_export_selection", {})
+        if isinstance(export_selection, dict):
+            self.export_lead_frame_var.set(bool(export_selection.get("lead_frame", True)))
+            self.export_wire_var.set(bool(export_selection.get("wire", True)))
+            self.export_encapsulation_var.set(bool(export_selection.get("encapsulation", True)))
+            self.export_silicon_die_var.set(bool(export_selection.get("silicon_die", True)))
+            self.export_all_var.set(bool(export_selection.get("all", True)))
+        self.leg_profile_points_mm = _leg_profile_points_from_payload(payload, max(0.05, self._safe_float(self.thickness_z_var, 0.2)))
         self.silicon_die_thickness_var.set(self._safe_float_from_value(payload.get("silicon_die_thickness_mm"), 0.15))
+        self.die_clearance_var.set(self._safe_float_from_value(payload.get("die_clearance_mm"), DIE_CLEARANCE_MM))
+        self.wire_contact_clearance_var.set(self._safe_float_from_value(payload.get("wire_contact_clearance_mm"), LEADFRAME_CONTACT_CLEARANCE_MM))
+        self.helper_region_hover_var.set(self._safe_float_from_value(payload.get("helper_region_hover_mm"), HELPER_REGION_HOVER_MM))
         self.silicon_die_width_var.set(self._safe_float_from_value(payload.get("silicon_die_width_mm"), self._die_square_size_mm() * 0.8))
         self.silicon_die_height_var.set(self._safe_float_from_value(payload.get("silicon_die_height_mm"), self._die_square_size_mm() * 0.8))
         self.bond_end_region_size_var.set(self._safe_float_from_value(payload.get("bond_end_region_size_mm"), 0.2))
@@ -2298,6 +2794,25 @@ class IcChipGeneratorNewApp:
         if allow_negative:
             return value
         return max(minimum, value)
+
+    def _inherit_wire_randomization_from_current(self) -> None:
+        inherited_pairs = (
+            (self.rand_ball_radius_mean_var, self.rand_ball_radius_std_var, max(0.0, self._safe_float(self.ball_bond_diameter_var, 0.12) / 2.0)),
+            (self.rand_ball_height_mean_var, self.rand_ball_height_std_var, self._safe_float(self.ball_bond_length_var, 0.08)),
+            (self.rand_arc_height_mean_var, self.rand_arc_height_std_var, self._safe_float(self.wire_arc_height_var, 0.5)),
+            (self.rand_arc_xy_noise_mean_var, self.rand_arc_xy_noise_std_var, self._safe_float(self.wire_arc_xy_noise_var, 0.0)),
+            (self.rand_wire_rise_mean_var, self.rand_wire_rise_std_var, self._safe_float(self.wire_rise_z_var, 0.12)),
+            (self.rand_wire_diameter_mean_var, self.rand_wire_diameter_std_var, self._safe_float(self.wire_diameter_var, 0.03)),
+            (self.rand_wedge_length_mean_var, self.rand_wedge_length_std_var, self._safe_float(self.wedge_bond_length_var, 0.18)),
+            (self.rand_wedge_width_mean_var, self.rand_wedge_width_std_var, self._safe_float(self.wedge_bond_width_var, 0.08)),
+            (self.rand_wedge_thickness_mean_var, self.rand_wedge_thickness_std_var, self._safe_float(self.wedge_bond_thickness_var, 0.02)),
+            (self.rand_wedge_approach_mean_var, self.rand_wedge_approach_std_var, self._safe_float(self.wedge_approach_run_var, 0.18)),
+            (self.rand_wedge_tail_mean_var, self.rand_wedge_tail_std_var, self._safe_float(self.wedge_tail_var, 0.0)),
+        )
+        for mean_var, std_var, inherited_value in inherited_pairs:
+            mean_var.set(inherited_value)
+            std_var.set(abs(inherited_value) * 0.1)
+        self.status_var.set("Inherited current wire parameters into randomization mean/std settings.")
 
     def _randomize_wire_profiles(self) -> None:
         if not self.wire_profiles:
@@ -2500,6 +3015,37 @@ class IcChipGeneratorNewApp:
             (half_width_mm, -half_length_mm),
         ]
 
+    def _leg_anchor_mm(self) -> tuple[float, float]:
+        return (0.0, max(0.05, self._safe_float(self.thickness_z_var, 0.2)) / 2.0)
+
+    def _ensure_leg_anchor_position(self) -> None:
+        anchor_mm = self._leg_anchor_mm()
+        if not self.leg_profile_points_mm:
+            self.leg_profile_points_mm = [anchor_mm]
+            return
+        updated_points = list(self.leg_profile_points_mm)
+        updated_points[0] = anchor_mm
+        self.leg_profile_points_mm = updated_points
+
+    def _event_alt_pressed(self, event) -> bool:
+        state_value = int(getattr(event, "state", 0) or 0)
+        return self.leg_alt_override or bool(state_value & 0x0008) or bool(state_value & 0x0080) or bool(state_value & 0x20000)
+
+    def _on_alt_press(self, _event) -> None:
+        self.leg_alt_override = True
+
+    def _on_alt_release(self, _event) -> None:
+        self.leg_alt_override = False
+
+    def _snap_leg_horizontal_vertical(self, anchor_mm: tuple[float, float], candidate_mm: tuple[float, float], *, alt_pressed: bool) -> tuple[float, float]:
+        if alt_pressed:
+            return candidate_mm
+        dx = candidate_mm[0] - anchor_mm[0]
+        dy = candidate_mm[1] - anchor_mm[1]
+        if abs(dx) >= abs(dy):
+            return (candidate_mm[0], anchor_mm[1])
+        return (anchor_mm[0], candidate_mm[1])
+
     def _bond_start_region_counts(self) -> dict[str, int]:
         return {
             "Top": max(0, self._safe_int(self.bond_start_top_count_var, 2)),
@@ -2522,6 +3068,15 @@ class IcChipGeneratorNewApp:
 
     def _bond_end_region_offset_mm(self) -> float:
         return max(0.0, self._safe_float(self.bond_end_region_offset_var, 0.0))
+
+    def _die_clearance_mm(self) -> float:
+        return max(0.0, self._safe_float(self.die_clearance_var, DIE_CLEARANCE_MM))
+
+    def _wire_contact_clearance_mm(self) -> float:
+        return max(0.0, self._safe_float(self.wire_contact_clearance_var, LEADFRAME_CONTACT_CLEARANCE_MM))
+
+    def _helper_region_hover_mm(self) -> float:
+        return max(0.0, self._safe_float(self.helper_region_hover_var, HELPER_REGION_HOVER_MM))
 
     def _silicon_die_thickness_mm(self) -> float:
         return max(0.02, self._safe_float(self.silicon_die_thickness_var, 0.15))
@@ -2583,12 +3138,11 @@ class IcChipGeneratorNewApp:
                     end_x_mm + (direction_xy[0] * offset_mm),
                     end_y_mm + (direction_xy[1] * offset_mm),
                 )
-            dx = end_x_mm - path_mm[0][0]
-            dy = end_y_mm - path_mm[0][1]
-            if abs(dx) >= abs(dy):
-                side_name = "Right" if dx >= 0.0 else "Left"
+            center_x_mm, center_y_mm = center_mm
+            if abs(center_x_mm) >= abs(center_y_mm):
+                side_name = "Right" if center_x_mm >= 0.0 else "Left"
             else:
-                side_name = "Top" if dy >= 0.0 else "Bottom"
+                side_name = "Top" if center_y_mm >= 0.0 else "Bottom"
             regions.append(
                 {
                     "path_index": path_index,
@@ -2699,7 +3253,14 @@ class IcChipGeneratorNewApp:
 
     def _draw_paths(self) -> None:
         for path_index, path_mm in enumerate(self.saved_paths_mm):
-            self._draw_path(path_mm, "#14532d", "#22c55e", f"P{path_index + 1}")
+            is_selected = path_index == self.selected_path_index
+            self._draw_path(
+                path_mm,
+                "#0f3f24" if is_selected else "#14532d",
+                "#f59e0b" if is_selected else "#22c55e",
+                f"P{path_index + 1}",
+                selected=is_selected,
+            )
         if self.current_path_mm:
             preview_path = list(self.current_path_mm)
             if self.preview_point_mm is not None:
@@ -2767,20 +3328,128 @@ class IcChipGeneratorNewApp:
             joinstyle="round",
         )
 
-    def _draw_path(self, path_mm: list[tuple[float, float]], line_color: str, vertex_color: str, label: str, dashed: bool = False) -> None:
+    def _draw_path(
+        self,
+        path_mm: list[tuple[float, float]],
+        line_color: str,
+        vertex_color: str,
+        label: str,
+        dashed: bool = False,
+        selected: bool = False,
+    ) -> None:
         half_width_mm = max(0.05, self._safe_float(self.path_width_var, 0.8) / 2.0)
-        rail_width_px = 2.0
+        rail_width_px = 3.0 if selected else 2.0
         if len(path_mm) >= 2:
             left_edge_mm = self._offset_path_mm(path_mm, half_width_mm)
             right_edge_mm = self._offset_path_mm(path_mm, -half_width_mm)
             self._draw_polyline_mm(left_edge_mm, line_color, rail_width_px, dashed=dashed)
             self._draw_polyline_mm(right_edge_mm, line_color, rail_width_px, dashed=dashed)
-            self._draw_polyline_mm(path_mm, vertex_color, 1.0, dashed=dashed)
+            self._draw_polyline_mm(path_mm, vertex_color, 1.5 if selected else 1.0, dashed=dashed)
         for point_index, point_mm in enumerate(path_mm):
             x_px, y_px = self._world_to_canvas(point_mm)
-            self.canvas.create_oval(x_px - 2.5, y_px - 2.5, x_px + 2.5, y_px + 2.5, fill=vertex_color, outline="")
+            radius_px = 3.5 if selected else 2.5
+            self.canvas.create_oval(x_px - radius_px, y_px - radius_px, x_px + radius_px, y_px + radius_px, fill=vertex_color, outline="")
             if point_index == 0:
                 self.canvas.create_text(x_px + 14, y_px - 10, text=f"{label}  {self._safe_float(self.path_width_var, 0.8):.2f} mm", fill=line_color, font=("Segoe UI", 8, "bold"))
+
+    def _leg_local_to_canvas(self, point_mm: tuple[float, float]) -> tuple[float, float]:
+        return (
+            (DEFAULT_CANVAS_WIDTH / 2.0) + (point_mm[0] * self.leg_canvas_scale_px_per_mm),
+            (DEFAULT_CANVAS_HEIGHT / 2.0) - (point_mm[1] * self.leg_canvas_scale_px_per_mm),
+        )
+
+    def _leg_canvas_to_local(self, point_px: tuple[float, float]) -> tuple[float, float]:
+        return (
+            (point_px[0] - (DEFAULT_CANVAS_WIDTH / 2.0)) / self.leg_canvas_scale_px_per_mm,
+            ((DEFAULT_CANVAS_HEIGHT / 2.0) - point_px[1]) / self.leg_canvas_scale_px_per_mm,
+        )
+
+    def _draw_leg_canvas(self) -> None:
+        self._ensure_leg_anchor_position()
+        step_px = max(8, int(self.leg_canvas_scale_px_per_mm))
+        for x_coord in range(0, DEFAULT_CANVAS_WIDTH, step_px):
+            self.canvas.create_line(x_coord, 0, x_coord, DEFAULT_CANVAS_HEIGHT, fill=CANVAS_GRID)
+        for y_coord in range(0, DEFAULT_CANVAS_HEIGHT, step_px):
+            self.canvas.create_line(0, y_coord, DEFAULT_CANVAS_WIDTH, y_coord, fill=CANVAS_GRID)
+        self.canvas.create_line(DEFAULT_CANVAS_WIDTH / 2.0, 0, DEFAULT_CANVAS_WIDTH / 2.0, DEFAULT_CANVAS_HEIGHT, fill=CANVAS_AXIS, width=2)
+        self.canvas.create_line(0, DEFAULT_CANVAS_HEIGHT / 2.0, DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT / 2.0, fill=CANVAS_AXIS, width=2)
+        anchor_px = self._leg_local_to_canvas(self._leg_anchor_mm())
+        self.canvas.create_oval(anchor_px[0] - 4, anchor_px[1] - 4, anchor_px[0] + 4, anchor_px[1] + 4, fill="#f59e0b", outline="")
+        self.canvas.create_text(anchor_px[0] + 14, anchor_px[1] - 10, text="Lead Anchor", fill="#8a4b08", font=("Segoe UI", 9, "bold"))
+        if len(self.leg_profile_points_mm) >= 2:
+            flat_points: list[float] = []
+            for point_mm in self.leg_profile_points_mm:
+                x_px, y_px = self._leg_local_to_canvas(point_mm)
+                flat_points.extend([x_px, y_px])
+            self.canvas.create_line(*flat_points, fill="#6d28d9", width=3, capstyle="round", joinstyle="round")
+        for point_index, point_mm in enumerate(self.leg_profile_points_mm):
+            x_px, y_px = self._leg_local_to_canvas(point_mm)
+            color = "#f59e0b" if point_index == 0 else "#7c3aed"
+            radius_px = 4 if point_index == 0 else 3
+            self.canvas.create_oval(x_px - radius_px, y_px - radius_px, x_px + radius_px, y_px + radius_px, fill=color, outline="")
+        self.canvas.create_text(70, 18, text="Outward", fill="#4a3727", font=("Segoe UI", 9, "bold"))
+        self.canvas.create_text(18, 20, text="Z", fill="#4a3727", font=("Segoe UI", 9, "bold"))
+        self.canvas.create_text(
+            DEFAULT_CANVAS_WIDTH / 2.0,
+            24,
+            text="Leg Design Side View",
+            fill="#4a3727",
+            font=("Segoe UI", 11, "bold"),
+        )
+
+    def _find_leg_vertex_hit(self, event_x: float, event_y: float) -> int | None:
+        for point_index, point_mm in enumerate(self.leg_profile_points_mm):
+            x_px, y_px = self._leg_local_to_canvas(point_mm)
+            if abs(x_px - event_x) <= 7 and abs(y_px - event_y) <= 7:
+                return point_index
+        return None
+
+    def _on_leg_left_click(self, event) -> None:
+        self._ensure_leg_anchor_position()
+        vertex_index = self._find_leg_vertex_hit(event.x, event.y)
+        if vertex_index is not None and vertex_index > 0:
+            self.leg_dragging_index = vertex_index
+            return
+        anchor_path = list(self.leg_profile_points_mm) if self.leg_profile_points_mm else [self._leg_anchor_mm()]
+        local_candidate_mm = self._leg_canvas_to_local((event.x, event.y))
+        snapped_mm = self._snap_leg_horizontal_vertical(anchor_path[-1], local_candidate_mm, alt_pressed=self._event_alt_pressed(event))
+        self.leg_profile_points_mm.append(snapped_mm)
+        self._redraw_canvas()
+        self._autosave_project_files()
+        self._push_viewer_payload()
+
+    def _on_leg_left_drag(self, event) -> None:
+        if self.leg_dragging_index is None:
+            return
+        if 0 < self.leg_dragging_index < len(self.leg_profile_points_mm):
+            updated_points = list(self.leg_profile_points_mm)
+            local_candidate_mm = self._leg_canvas_to_local((event.x, event.y))
+            updated_points[self.leg_dragging_index] = self._snap_leg_horizontal_vertical(
+                updated_points[self.leg_dragging_index - 1],
+                local_candidate_mm,
+                alt_pressed=self._event_alt_pressed(event),
+            )
+            self.leg_profile_points_mm = updated_points
+            self._redraw_canvas()
+
+    def _on_leg_left_release(self, _event) -> None:
+        self.leg_dragging_index = None
+        self._autosave_project_files()
+        self._push_viewer_payload()
+
+    def _undo_leg_point(self) -> None:
+        self._ensure_leg_anchor_position()
+        if len(self.leg_profile_points_mm) > 1:
+            self.leg_profile_points_mm.pop()
+            self._redraw_canvas()
+            self._autosave_project_files()
+            self._push_viewer_payload()
+
+    def _clear_leg_profile(self) -> None:
+        self.leg_profile_points_mm = [self._leg_anchor_mm()]
+        self._redraw_canvas()
+        self._autosave_project_files()
+        self._push_viewer_payload()
 
     def _closest_point_on_segment_mm(
         self,
@@ -2811,7 +3480,7 @@ class IcChipGeneratorNewApp:
         ]
         best_point_mm: tuple[float, float] | None = None
         best_distance_px = float("inf")
-        threshold_px = max(10.0, (self._end_region_size_mm() * self.scale_px_per_mm * 0.35))
+        threshold_px = max(5.0, (self._end_region_size_mm() * self.scale_px_per_mm * 0.18))
         for start_mm, end_mm in edges:
             candidate_mm = self._closest_point_on_segment_mm(cursor_mm, start_mm, end_mm)
             candidate_px = self._world_to_canvas(candidate_mm)
@@ -2848,6 +3517,38 @@ class IcChipGeneratorNewApp:
     def _mirror_paths_vertical(self) -> None:
         self._mirror_paths("vertical")
 
+    def _rotate_copy_paths_quadrants(self) -> None:
+        if not self.saved_paths_mm:
+            self.status_var.set("No saved paths are available to rotate-copy.")
+            return
+        source_paths_mm = [list(path_mm) for path_mm in self.saved_paths_mm if len(path_mm) >= 2]
+        if not source_paths_mm:
+            self.status_var.set("No valid saved paths are available to rotate-copy.")
+            return
+
+        rotated_paths_mm: list[list[tuple[float, float]]] = []
+        for quarter_turns in (1, 2, 3):
+            angle_rad = quarter_turns * (math.pi / 2.0)
+            cos_angle = math.cos(angle_rad)
+            sin_angle = math.sin(angle_rad)
+            for source_path_mm in source_paths_mm:
+                rotated_path_mm: list[tuple[float, float]] = []
+                for point_x_mm, point_y_mm in source_path_mm:
+                    rotated_path_mm.append(
+                        (
+                            (point_x_mm * cos_angle) - (point_y_mm * sin_angle),
+                            (point_x_mm * sin_angle) + (point_y_mm * cos_angle),
+                        )
+                    )
+                rotated_paths_mm.append(rotated_path_mm)
+
+        self.saved_paths_mm.extend(rotated_paths_mm)
+        self.status_var.set(
+            f"Added {len(rotated_paths_mm)} rotated path(s) at 90, 180, and 270 degrees for square-package replication."
+        )
+        self._redraw_canvas()
+        self._autosave_project_files()
+
     def _find_slot_hit(self, event_x: float, event_y: float) -> GuideSlot | None:
         closest_slot: GuideSlot | None = None
         closest_distance_px = float("inf")
@@ -2863,9 +3564,26 @@ class IcChipGeneratorNewApp:
         for path_index, path_mm in enumerate(self.saved_paths_mm):
             for point_index, point_mm in enumerate(path_mm):
                 x_px, y_px = self._world_to_canvas(point_mm)
-            if abs(x_px - event_x) <= 7 and abs(y_px - event_y) <= 7:
-                return (path_index, point_index)
+                if abs(x_px - event_x) <= 7 and abs(y_px - event_y) <= 7:
+                    return (path_index, point_index)
         return None
+
+    def _find_path_hit(self, event_x: float, event_y: float) -> int | None:
+        cursor_mm = self._canvas_to_world((event_x, event_y))
+        best_path_index: int | None = None
+        best_distance_px = float("inf")
+        threshold_px = max(8.0, (self._safe_float(self.path_width_var, 0.8) * self.scale_px_per_mm * 0.65))
+        for path_index, path_mm in enumerate(self.saved_paths_mm):
+            if len(path_mm) < 2:
+                continue
+            for start_mm, end_mm in zip(path_mm[:-1], path_mm[1:]):
+                closest_mm = self._closest_point_on_segment_mm(cursor_mm, start_mm, end_mm)
+                closest_px = self._world_to_canvas(closest_mm)
+                distance_px = math.dist(closest_px, (event_x, event_y))
+                if distance_px <= threshold_px and distance_px < best_distance_px:
+                    best_distance_px = distance_px
+                    best_path_index = path_index
+        return best_path_index
 
     def _build_next_step_meshes(self) -> list[tuple[str, trimesh.Trimesh, str]]:
         thickness_mm = max(0.05, self._safe_float(self.thickness_z_var, 0.2))
@@ -2881,7 +3599,7 @@ class IcChipGeneratorNewApp:
         silicon_die_height_mm = self._silicon_die_height_mm()
         silicon_die_thickness_mm = self._silicon_die_thickness_mm()
         silicon_die_mesh = _ensure_outward_normals(trimesh.creation.box(extents=(silicon_die_width_mm, silicon_die_height_mm, silicon_die_thickness_mm)))
-        silicon_die_mesh.apply_transform(_translation_matrix(0.0, 0.0, thickness_mm + DIE_CLEARANCE_MM + (silicon_die_thickness_mm / 2.0)))
+        silicon_die_mesh.apply_transform(_translation_matrix(0.0, 0.0, thickness_mm + self._die_clearance_mm() + (silicon_die_thickness_mm / 2.0)))
         meshes.append(("Silicon Die", silicon_die_mesh, "#232323"))
 
         path_meshes: list[trimesh.Trimesh] = []
@@ -2902,7 +3620,7 @@ class IcChipGeneratorNewApp:
         for region in self._bond_end_region_centers_mm():
             center_x_mm, center_y_mm = region["center_mm"]
             mesh = _ensure_outward_normals(trimesh.creation.box(extents=(bond_end_region_size_mm, bond_end_region_size_mm, 0.03)))
-            mesh.apply_transform(_translation_matrix(center_x_mm, center_y_mm, thickness_mm + 0.015))
+            mesh.apply_transform(_translation_matrix(center_x_mm, center_y_mm, thickness_mm + self._helper_region_hover_mm() + 0.015))
             bond_end_meshes.append(mesh)
         if bond_end_meshes:
             meshes.append(("Bond End Regions", _ensure_outward_normals(trimesh.util.concatenate(bond_end_meshes)), "#2563eb"))
@@ -2912,7 +3630,7 @@ class IcChipGeneratorNewApp:
         for region in self._bond_start_region_centers_mm():
             center_x_mm, center_y_mm = region["center_mm"]
             mesh = _ensure_outward_normals(trimesh.creation.box(extents=(bond_start_region_size_mm, bond_start_region_size_mm, 0.03)))
-            mesh.apply_transform(_translation_matrix(center_x_mm, center_y_mm, thickness_mm + DIE_CLEARANCE_MM + silicon_die_thickness_mm + 0.015))
+            mesh.apply_transform(_translation_matrix(center_x_mm, center_y_mm, thickness_mm + self._die_clearance_mm() + silicon_die_thickness_mm + self._helper_region_hover_mm() + 0.015))
             bond_start_meshes.append(mesh)
         if bond_start_meshes:
             meshes.append(("Bond Start Regions", _ensure_outward_normals(trimesh.util.concatenate(bond_start_meshes)), "#7c3aed"))
@@ -2960,22 +3678,53 @@ class IcChipGeneratorNewApp:
     def _snap_to_45_degrees(self, anchor_mm: tuple[float, float], candidate_mm: tuple[float, float]) -> tuple[float, float]:
         dx = candidate_mm[0] - anchor_mm[0]
         dy = candidate_mm[1] - anchor_mm[1]
-        distance_mm = math.hypot(dx, dy)
-        if distance_mm <= 1e-9:
+        if math.hypot(dx, dy) <= 1e-9:
             return candidate_mm
         angle_deg = math.degrees(math.atan2(dy, dx))
-        snapped_angle_deg = round(angle_deg / 45.0) * 45.0
-        snapped_angle_rad = math.radians(snapped_angle_deg)
+        nearest_angle_deg = round(angle_deg / 45.0) * 45.0
+        if self.current_path_snap_angle_deg is None:
+            self.current_path_snap_angle_deg = nearest_angle_deg
+        else:
+            angle_delta_deg = ((angle_deg - self.current_path_snap_angle_deg + 180.0) % 360.0) - 180.0
+            if abs(angle_delta_deg) > 30.0:
+                self.current_path_snap_angle_deg = nearest_angle_deg
+        snapped_angle_deg = self.current_path_snap_angle_deg
+        normalized_angle_deg = snapped_angle_deg % 360.0
+        if normalized_angle_deg in (0.0, 180.0):
+            return (anchor_mm[0] + dx, anchor_mm[1])
+        if normalized_angle_deg in (90.0, 270.0):
+            return (anchor_mm[0], anchor_mm[1] + dy)
+
+        diagonal_run_mm = min(abs(dx), abs(dy))
+        sign_x = 1.0 if math.cos(math.radians(snapped_angle_deg)) >= 0.0 else -1.0
+        sign_y = 1.0 if math.sin(math.radians(snapped_angle_deg)) >= 0.0 else -1.0
         return (
-            anchor_mm[0] + (math.cos(snapped_angle_rad) * distance_mm),
-            anchor_mm[1] + (math.sin(snapped_angle_rad) * distance_mm),
+            anchor_mm[0] + (sign_x * diagonal_run_mm),
+            anchor_mm[1] + (sign_y * diagonal_run_mm),
         )
 
     def _on_left_click(self, event) -> None:
+        if self.step_index == 5:
+            self._on_leg_left_click(event)
+            return
+        alt_pressed = self._event_alt_pressed(event)
         vertex_hit = self._find_vertex_hit(event.x, event.y)
         if vertex_hit is not None:
+            self.selected_path_index = vertex_hit[0]
             self.dragging_vertex = vertex_hit
+            self._redraw_canvas()
             return
+        if not self.current_path_mm:
+            path_hit = self._find_path_hit(event.x, event.y)
+            if path_hit is not None:
+                self.selected_path_index = path_hit
+                self.preview_point_mm = None
+                self.status_var.set(f"Selected saved path P{path_hit + 1}.")
+                self._redraw_canvas()
+                return
+            if self.selected_path_index is not None:
+                self.selected_path_index = None
+                self._redraw_canvas()
 
         slot_hit = self._find_slot_hit(event.x, event.y)
         if not self.current_path_mm:
@@ -2983,6 +3732,7 @@ class IcChipGeneratorNewApp:
                 self.status_var.set("Start by clicking a guide midpoint on one of the enabled sides.")
                 return
             self.current_path_mm.append(slot_hit.center_mm)
+            self.current_path_snap_angle_deg = None
             self.preview_point_mm = None
             self.status_var.set(f"Started path from {slot_hit.side_name} pin {slot_hit.index}.")
             self._redraw_canvas()
@@ -2991,22 +3741,27 @@ class IcChipGeneratorNewApp:
 
         end_snap_mm = self._find_end_region_snap_point(event.x, event.y)
         if end_snap_mm is not None:
-            snapped_mm = self._snap_to_45_degrees(self.current_path_mm[-1], end_snap_mm)
+            snapped_mm = end_snap_mm if alt_pressed else self._snap_to_45_degrees(self.current_path_mm[-1], end_snap_mm)
             self.current_path_mm.append(snapped_mm)
+            self.current_path_snap_angle_deg = None
             self.preview_point_mm = None
             self.status_var.set("Snapped to ending region and finished the path.")
             self._finish_current_path()
             return
 
         candidate_mm = self._canvas_to_world((event.x, event.y))
-        snapped_mm = self._snap_to_45_degrees(self.current_path_mm[-1], candidate_mm)
+        snapped_mm = candidate_mm if alt_pressed else self._snap_to_45_degrees(self.current_path_mm[-1], candidate_mm)
         self.current_path_mm.append(snapped_mm)
+        self.current_path_snap_angle_deg = None
         self.preview_point_mm = None
         self.status_var.set(f"Added point {len(self.current_path_mm)} with 45-degree snap.")
         self._redraw_canvas()
         self._autosave_project_files()
 
     def _on_left_drag(self, event) -> None:
+        if self.step_index == 5:
+            self._on_leg_left_drag(event)
+            return
         if self.dragging_vertex is None:
             return
         path_index, point_index = self.dragging_vertex
@@ -3016,30 +3771,40 @@ class IcChipGeneratorNewApp:
             self._redraw_canvas()
 
     def _on_left_release(self, _event) -> None:
+        if self.step_index == 5:
+            self._on_leg_left_release(_event)
+            return
         self.dragging_vertex = None
         self._autosave_project_files()
 
     def _on_motion(self, event) -> None:
+        if self.step_index == 5:
+            return
         if self.is_panning or self.dragging_vertex is not None:
             return
+        alt_pressed = self._event_alt_pressed(event)
         if not self.current_path_mm:
             self.preview_point_mm = None
             self._redraw_canvas()
             return
         end_snap_mm = self._find_end_region_snap_point(event.x, event.y)
         if end_snap_mm is not None:
-            self.preview_point_mm = self._snap_to_45_degrees(self.current_path_mm[-1], end_snap_mm)
+            self.preview_point_mm = end_snap_mm if alt_pressed else self._snap_to_45_degrees(self.current_path_mm[-1], end_snap_mm)
             self._redraw_canvas()
             return
         candidate_mm = self._canvas_to_world((event.x, event.y))
-        self.preview_point_mm = self._snap_to_45_degrees(self.current_path_mm[-1], candidate_mm)
+        self.preview_point_mm = candidate_mm if alt_pressed else self._snap_to_45_degrees(self.current_path_mm[-1], candidate_mm)
         self._redraw_canvas()
 
     def _on_pan_start(self, event) -> None:
+        if self.step_index == 5:
+            return
         self.is_panning = True
         self.last_pan_px = (event.x, event.y)
 
     def _on_pan_move(self, event) -> None:
+        if self.step_index == 5:
+            return
         if not self.is_panning or self.last_pan_px is None:
             return
         dx = event.x - self.last_pan_px[0]
@@ -3049,10 +3814,26 @@ class IcChipGeneratorNewApp:
         self._redraw_canvas()
 
     def _on_pan_end(self, _event) -> None:
+        if self.step_index == 5:
+            return
         self.is_panning = False
         self.last_pan_px = None
 
     def _on_zoom(self, event) -> None:
+        if self.step_index == 5:
+            delta = 0
+            if hasattr(event, "delta") and event.delta:
+                delta = 1 if event.delta > 0 else -1
+            elif getattr(event, "num", None) == 4:
+                delta = 1
+            elif getattr(event, "num", None) == 5:
+                delta = -1
+            if delta == 0:
+                return
+            factor = 1.12 if delta > 0 else (1.0 / 1.12)
+            self.leg_canvas_scale_px_per_mm = min(220.0, max(10.0, self.leg_canvas_scale_px_per_mm * factor))
+            self._redraw_canvas()
+            return
         delta = 0
         if hasattr(event, "delta") and event.delta:
             delta = 1 if event.delta > 0 else -1
@@ -3071,7 +3852,9 @@ class IcChipGeneratorNewApp:
             messagebox.showerror("Path Incomplete", "Add at least 2 points before finishing the path.", parent=self.root)
             return
         self.saved_paths_mm.append(list(self.current_path_mm))
+        self.selected_path_index = len(self.saved_paths_mm) - 1
         self.current_path_mm.clear()
+        self.current_path_snap_angle_deg = None
         self.preview_point_mm = None
         self.status_var.set(f"Saved path {len(self.saved_paths_mm)}.")
         self._redraw_canvas()
@@ -3080,6 +3863,7 @@ class IcChipGeneratorNewApp:
     def _undo_point(self) -> None:
         if self.current_path_mm:
             self.current_path_mm.pop()
+            self.current_path_snap_angle_deg = None
             self.preview_point_mm = None
             self.status_var.set(f"Draft points remaining: {len(self.current_path_mm)}.")
             self._redraw_canvas()
@@ -3087,12 +3871,26 @@ class IcChipGeneratorNewApp:
             return
         if self.saved_paths_mm:
             self.saved_paths_mm.pop()
+            if self.selected_path_index is not None:
+                if self.selected_path_index >= len(self.saved_paths_mm):
+                    self.selected_path_index = len(self.saved_paths_mm) - 1 if self.saved_paths_mm else None
             self.status_var.set("Removed last saved path.")
             self._redraw_canvas()
             self._autosave_project_files()
 
     def _clear_current_path(self) -> None:
+        if self.selected_path_index is not None and 0 <= self.selected_path_index < len(self.saved_paths_mm):
+            deleted_index = self.selected_path_index
+            self.saved_paths_mm.pop(deleted_index)
+            self.selected_path_index = None
+            self.current_path_snap_angle_deg = None
+            self.preview_point_mm = None
+            self.status_var.set(f"Deleted saved path P{deleted_index + 1}.")
+            self._redraw_canvas()
+            self._autosave_project_files()
+            return
         self.current_path_mm.clear()
+        self.current_path_snap_angle_deg = None
         self.preview_point_mm = None
         self.status_var.set("Cleared current draft path.")
         self._redraw_canvas()
@@ -3100,7 +3898,9 @@ class IcChipGeneratorNewApp:
 
     def _clear_saved_paths(self) -> None:
         self.saved_paths_mm.clear()
+        self.selected_path_index = None
         self.current_path_mm.clear()
+        self.current_path_snap_angle_deg = None
         self.preview_point_mm = None
         self.status_var.set("Cleared all saved paths.")
         self._redraw_canvas()
@@ -3121,6 +3921,47 @@ class IcChipGeneratorNewApp:
         payload = self._project_payload()
         Path(target).write_text(json.dumps(payload, indent=2), encoding="utf-8")
         self.status_var.set(f"Saved step 1 JSON to {target}.")
+
+    def _export_final_stls(self) -> None:
+        payload = self._project_payload()
+        if not any(isinstance(path, list) and len(path) >= 2 for path in payload.get("saved_paths_mm", [])):
+            messagebox.showerror("Export Blocked", "Create and save at least one leadframe path before exporting STLs.", parent=self.root)
+            return
+        filename_map = {
+            "lead_frame": "lead_frame.stl",
+            "wire": "wire.stl",
+            "encapsulation": "encapsulation.stl",
+            "silicon_die": "silicon_die.stl",
+            "all": "all.stl",
+        }
+        selected_keys = [
+            mesh_key
+            for mesh_key, enabled in (
+                ("lead_frame", bool(self.export_lead_frame_var.get())),
+                ("wire", bool(self.export_wire_var.get())),
+                ("encapsulation", bool(self.export_encapsulation_var.get())),
+                ("silicon_die", bool(self.export_silicon_die_var.get())),
+                ("all", bool(self.export_all_var.get())),
+            )
+            if enabled
+        ]
+        if not selected_keys:
+            messagebox.showerror("Export Blocked", "Select at least one STL group in Step 7 before exporting.", parent=self.root)
+            return
+        try:
+            export_dir = self.current_project_dir / "STL"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            export_meshes = _build_export_meshes_from_payload(payload)
+            missing_keys = [key for key in selected_keys if key not in export_meshes]
+            if missing_keys:
+                raise ValueError(f"Missing export meshes: {', '.join(missing_keys)}")
+            for mesh_key in selected_keys:
+                filename = filename_map[mesh_key]
+                export_meshes[mesh_key].export(str(export_dir / filename))
+            self.status_var.set(f"Exported {len(selected_keys)} STL(s) to {export_dir}.")
+        except Exception as exc:
+            messagebox.showerror("STL Export Failed", str(exc), parent=self.root)
+            self.status_var.set(f"STL export failed: {exc}")
 
     def _project_payload(self) -> dict:
         outline_x_mm, outline_y_mm = self._outline_dims()
@@ -3158,6 +3999,9 @@ class IcChipGeneratorNewApp:
             "end_region_offset_y_mm": self._safe_float(self.end_region_offset_y_var, -2.0),
             "end_region_size_mm": self._end_region_size_mm(),
             "end_region_center_mm": list(self._end_region_center_mm()),
+            "die_clearance_mm": self._die_clearance_mm(),
+            "wire_contact_clearance_mm": self._wire_contact_clearance_mm(),
+            "helper_region_hover_mm": self._helper_region_hover_mm(),
             "outer_model_scale_percent": max(0.0, self._safe_float(self.outer_model_scale_percent_var, 0.1)),
             "encapsulation_width_mm": self._encapsulation_width_mm(),
             "encapsulation_length_mm": self._encapsulation_length_mm(),
@@ -3167,9 +4011,19 @@ class IcChipGeneratorNewApp:
                 "lead_frame_paths": bool(self.show_leadframe_paths_var.get()),
                 "centered_die_compartment": bool(self.show_centered_die_compartment_var.get()),
                 "silicon_die": bool(self.show_silicon_die_var.get()),
+                "bond_end_regions": bool(self.show_bond_end_regions_var.get()),
+                "bond_start_regions": bool(self.show_bond_start_regions_var.get()),
                 "bond_assemblies": bool(self.show_bond_assemblies_var.get()),
                 "scaled_outer_model": bool(self.show_scaled_outer_model_var.get()),
                 "encapsulation": bool(self.show_encapsulation_var.get()),
+                "legs": bool(self.show_legs_var.get()),
+            },
+            "step7_export_selection": {
+                "lead_frame": bool(self.export_lead_frame_var.get()),
+                "wire": bool(self.export_wire_var.get()),
+                "encapsulation": bool(self.export_encapsulation_var.get()),
+                "silicon_die": bool(self.export_silicon_die_var.get()),
+                "all": bool(self.export_all_var.get()),
             },
             "silicon_die_width_mm": self._silicon_die_width_mm(),
             "silicon_die_height_mm": self._silicon_die_height_mm(),
@@ -3198,6 +4052,7 @@ class IcChipGeneratorNewApp:
             "saved_paths_mm": [[list(point) for point in path] for path in self.saved_paths_mm],
             "current_path_mm": [list(point) for point in self.current_path_mm],
             "preview_point_mm": list(self.preview_point_mm) if self.preview_point_mm is not None else None,
+            "leg_profile_mm": [[point_u_mm, point_z_mm] for point_u_mm, point_z_mm in self.leg_profile_points_mm],
             "wire_profiles": [dict(profile) for profile in self.wire_profiles],
             "wire_randomization": {
                 "ball_radius_mean_mm": self._safe_float(self.rand_ball_radius_mean_var, 0.06),
@@ -3240,6 +4095,9 @@ class IcChipGeneratorNewApp:
                 "silicon_die_width_mm": self._silicon_die_width_mm(),
                 "silicon_die_height_mm": self._silicon_die_height_mm(),
                 "silicon_die_thickness_mm": self._silicon_die_thickness_mm(),
+                "die_clearance_mm": self._die_clearance_mm(),
+                "wire_contact_clearance_mm": self._wire_contact_clearance_mm(),
+                "helper_region_hover_mm": self._helper_region_hover_mm(),
                 "bond_end_region_size_mm": self._bond_end_region_size_mm(),
                 "bond_end_region_offset_mm": self._bond_end_region_offset_mm(),
                 "bond_start_region_size_mm": self._bond_start_region_size_mm(),
@@ -3294,9 +4152,26 @@ class IcChipGeneratorNewApp:
                     "lead_frame_paths": bool(self.show_leadframe_paths_var.get()),
                     "centered_die_compartment": bool(self.show_centered_die_compartment_var.get()),
                     "silicon_die": bool(self.show_silicon_die_var.get()),
+                    "bond_end_regions": bool(self.show_bond_end_regions_var.get()),
+                    "bond_start_regions": bool(self.show_bond_start_regions_var.get()),
                     "bond_assemblies": bool(self.show_bond_assemblies_var.get()),
                     "scaled_outer_model": bool(self.show_scaled_outer_model_var.get()),
                     "encapsulation": bool(self.show_encapsulation_var.get()),
+                    "legs": bool(self.show_legs_var.get()),
+                },
+            }
+        if stage_index >= 5:
+            payload["leg_design"] = {
+                "leg_profile_mm": [[point_u_mm, point_z_mm] for point_u_mm, point_z_mm in self.leg_profile_points_mm],
+            }
+        if stage_index >= 6:
+            payload["export_stls"] = {
+                "step7_export_selection": {
+                    "lead_frame": bool(self.export_lead_frame_var.get()),
+                    "wire": bool(self.export_wire_var.get()),
+                    "encapsulation": bool(self.export_encapsulation_var.get()),
+                    "silicon_die": bool(self.export_silicon_die_var.get()),
+                    "all": bool(self.export_all_var.get()),
                 },
             }
         return payload
@@ -3311,6 +4186,9 @@ class IcChipGeneratorNewApp:
 
     def _redraw_canvas(self) -> None:
         self.canvas.delete("all")
+        if self.step_index == 5:
+            self._draw_leg_canvas()
+            return
         self._draw_grid()
         self._draw_outline()
         if self.step_index >= 4:

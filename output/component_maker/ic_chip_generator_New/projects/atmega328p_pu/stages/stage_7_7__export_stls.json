@@ -1,0 +1,2370 @@
+{
+  "saved_stage_index": 6,
+  "saved_stage_title": "7. Export STLs",
+  "current_step_index": 2,
+  "current_step_title": "3. Wire Bonding",
+  "status_message": "3. Wire Bonding active.",
+  "lead_frame_design": {
+    "project_name": "ATmega328P-PU",
+    "project_dir": "C:\\Users\\Ryant\\Documents\\GitHub\\PCB Data\\output\\component_maker\\ic_chip_generator_New\\projects\\atmega328p_pu",
+    "current_step_index": 2,
+    "current_step_title": "3. Wire Bonding",
+    "status_message": "3. Wire Bonding active.",
+    "outline_x_mm": 10.0,
+    "outline_y_mm": 10.0,
+    "thickness_z_mm": 0.1,
+    "leadframe_path_width_mm": 0.3,
+    "pins_per_side": {
+      "top": 7,
+      "bottom": 7,
+      "left": 7,
+      "right": 7
+    },
+    "leg_spacing_mm": {
+      "top": 1.2,
+      "bottom": 1.2,
+      "left": 1.2,
+      "right": 1.2
+    },
+    "edge_margin_mm": {
+      "top": 1.4000000000000004,
+      "bottom": 1.4000000000000004,
+      "left": 1.4000000000000004,
+      "right": 1.4000000000000004
+    },
+    "die_compartment_square_size_mm": 3.0,
+    "die_compartment_center_mm": [
+      0.0,
+      0.0
+    ],
+    "end_region_offset_x_mm": 0.0,
+    "end_region_offset_y_mm": 0.0,
+    "end_region_size_mm": 3.5,
+    "end_region_center_mm": [
+      0.0,
+      0.0
+    ],
+    "die_clearance_mm": 0.01,
+    "wire_contact_clearance_mm": 0.01,
+    "helper_region_hover_mm": 0.01,
+    "outer_model_scale_percent": 0.0,
+    "encapsulation_width_mm": 9.5,
+    "encapsulation_length_mm": 9.5,
+    "encapsulation_negative_extrusion_mm": 0.2,
+    "encapsulation_positive_extrusion_mm": 0.7,
+    "step5_viewer_visibility": {
+      "lead_frame_paths": true,
+      "centered_die_compartment": true,
+      "silicon_die": true,
+      "bond_end_regions": true,
+      "bond_start_regions": true,
+      "bond_assemblies": true,
+      "scaled_outer_model": true,
+      "encapsulation": true,
+      "legs": true
+    },
+    "step7_export_selection": {
+      "lead_frame": true,
+      "wire": true,
+      "encapsulation": true,
+      "silicon_die": true,
+      "all": true
+    },
+    "silicon_die_width_mm": 2.4,
+    "silicon_die_height_mm": 2.4,
+    "silicon_die_thickness_mm": 0.15,
+    "bond_end_region_size_mm": 0.15,
+    "bond_end_region_offset_mm": 0.15,
+    "bond_start_region_size_mm": 0.1,
+    "bond_start_region_gap_mm": 0.15,
+    "bond_start_region_offset_mm": 0.03,
+    "bond_start_region_counts": {
+      "top": 7,
+      "bottom": 7,
+      "left": 7,
+      "right": 7
+    },
+    "guide_slots": [
+      {
+        "side": "TOP",
+        "index": 1,
+        "center_mm": [
+          -3.5999999999999996,
+          5.0
+        ],
+        "start_mm": [
+          -3.7499999999999996,
+          5.0
+        ],
+        "end_mm": [
+          -3.4499999999999997,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 2,
+        "center_mm": [
+          -2.3999999999999995,
+          5.0
+        ],
+        "start_mm": [
+          -2.5499999999999994,
+          5.0
+        ],
+        "end_mm": [
+          -2.2499999999999996,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 3,
+        "center_mm": [
+          -1.1999999999999997,
+          5.0
+        ],
+        "start_mm": [
+          -1.3499999999999996,
+          5.0
+        ],
+        "end_mm": [
+          -1.0499999999999998,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 4,
+        "center_mm": [
+          0.0,
+          5.0
+        ],
+        "start_mm": [
+          -0.15,
+          5.0
+        ],
+        "end_mm": [
+          0.15,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 5,
+        "center_mm": [
+          1.2000000000000002,
+          5.0
+        ],
+        "start_mm": [
+          1.0500000000000003,
+          5.0
+        ],
+        "end_mm": [
+          1.35,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 6,
+        "center_mm": [
+          2.4000000000000004,
+          5.0
+        ],
+        "start_mm": [
+          2.2500000000000004,
+          5.0
+        ],
+        "end_mm": [
+          2.5500000000000003,
+          5.0
+        ]
+      },
+      {
+        "side": "TOP",
+        "index": 7,
+        "center_mm": [
+          3.5999999999999996,
+          5.0
+        ],
+        "start_mm": [
+          3.4499999999999997,
+          5.0
+        ],
+        "end_mm": [
+          3.7499999999999996,
+          5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 1,
+        "center_mm": [
+          -3.5999999999999996,
+          -5.0
+        ],
+        "start_mm": [
+          -3.7499999999999996,
+          -5.0
+        ],
+        "end_mm": [
+          -3.4499999999999997,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 2,
+        "center_mm": [
+          -2.3999999999999995,
+          -5.0
+        ],
+        "start_mm": [
+          -2.5499999999999994,
+          -5.0
+        ],
+        "end_mm": [
+          -2.2499999999999996,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 3,
+        "center_mm": [
+          -1.1999999999999997,
+          -5.0
+        ],
+        "start_mm": [
+          -1.3499999999999996,
+          -5.0
+        ],
+        "end_mm": [
+          -1.0499999999999998,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 4,
+        "center_mm": [
+          0.0,
+          -5.0
+        ],
+        "start_mm": [
+          -0.15,
+          -5.0
+        ],
+        "end_mm": [
+          0.15,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 5,
+        "center_mm": [
+          1.2000000000000002,
+          -5.0
+        ],
+        "start_mm": [
+          1.0500000000000003,
+          -5.0
+        ],
+        "end_mm": [
+          1.35,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 6,
+        "center_mm": [
+          2.4000000000000004,
+          -5.0
+        ],
+        "start_mm": [
+          2.2500000000000004,
+          -5.0
+        ],
+        "end_mm": [
+          2.5500000000000003,
+          -5.0
+        ]
+      },
+      {
+        "side": "BOTTOM",
+        "index": 7,
+        "center_mm": [
+          3.5999999999999996,
+          -5.0
+        ],
+        "start_mm": [
+          3.4499999999999997,
+          -5.0
+        ],
+        "end_mm": [
+          3.7499999999999996,
+          -5.0
+        ]
+      },
+      {
+        "side": "LEFT",
+        "index": 1,
+        "center_mm": [
+          -5.0,
+          -3.5999999999999996
+        ],
+        "start_mm": [
+          -5.0,
+          -3.7499999999999996
+        ],
+        "end_mm": [
+          -5.0,
+          -3.4499999999999997
+        ]
+      },
+      {
+        "side": "LEFT",
+        "index": 2,
+        "center_mm": [
+          -5.0,
+          -2.3999999999999995
+        ],
+        "start_mm": [
+          -5.0,
+          -2.5499999999999994
+        ],
+        "end_mm": [
+          -5.0,
+          -2.2499999999999996
+        ]
+      },
+      {
+        "side": "LEFT",
+        "index": 3,
+        "center_mm": [
+          -5.0,
+          -1.1999999999999997
+        ],
+        "start_mm": [
+          -5.0,
+          -1.3499999999999996
+        ],
+        "end_mm": [
+          -5.0,
+          -1.0499999999999998
+        ]
+      },
+      {
+        "side": "LEFT",
+        "index": 4,
+        "center_mm": [
+          -5.0,
+          0.0
+        ],
+        "start_mm": [
+          -5.0,
+          -0.15
+        ],
+        "end_mm": [
+          -5.0,
+          0.15
+        ]
+      },
+      {
+        "side": "LEFT",
+        "index": 5,
+        "center_mm": [
+          -5.0,
+          1.2000000000000002
+        ],
+        "start_mm": [
+          -5.0,
+          1.0500000000000003
+        ],
+        "end_mm": [
+          -5.0,
+          1.35
+        ]
+      },
+      {
+        "side": "LEFT",
+        "index": 6,
+        "center_mm": [
+          -5.0,
+          2.4000000000000004
+        ],
+        "start_mm": [
+          -5.0,
+          2.2500000000000004
+        ],
+        "end_mm": [
+          -5.0,
+          2.5500000000000003
+        ]
+      },
+      {
+        "side": "LEFT",
+        "index": 7,
+        "center_mm": [
+          -5.0,
+          3.5999999999999996
+        ],
+        "start_mm": [
+          -5.0,
+          3.4499999999999997
+        ],
+        "end_mm": [
+          -5.0,
+          3.7499999999999996
+        ]
+      },
+      {
+        "side": "RIGHT",
+        "index": 1,
+        "center_mm": [
+          5.0,
+          -3.5999999999999996
+        ],
+        "start_mm": [
+          5.0,
+          -3.7499999999999996
+        ],
+        "end_mm": [
+          5.0,
+          -3.4499999999999997
+        ]
+      },
+      {
+        "side": "RIGHT",
+        "index": 2,
+        "center_mm": [
+          5.0,
+          -2.3999999999999995
+        ],
+        "start_mm": [
+          5.0,
+          -2.5499999999999994
+        ],
+        "end_mm": [
+          5.0,
+          -2.2499999999999996
+        ]
+      },
+      {
+        "side": "RIGHT",
+        "index": 3,
+        "center_mm": [
+          5.0,
+          -1.1999999999999997
+        ],
+        "start_mm": [
+          5.0,
+          -1.3499999999999996
+        ],
+        "end_mm": [
+          5.0,
+          -1.0499999999999998
+        ]
+      },
+      {
+        "side": "RIGHT",
+        "index": 4,
+        "center_mm": [
+          5.0,
+          0.0
+        ],
+        "start_mm": [
+          5.0,
+          -0.15
+        ],
+        "end_mm": [
+          5.0,
+          0.15
+        ]
+      },
+      {
+        "side": "RIGHT",
+        "index": 5,
+        "center_mm": [
+          5.0,
+          1.2000000000000002
+        ],
+        "start_mm": [
+          5.0,
+          1.0500000000000003
+        ],
+        "end_mm": [
+          5.0,
+          1.35
+        ]
+      },
+      {
+        "side": "RIGHT",
+        "index": 6,
+        "center_mm": [
+          5.0,
+          2.4000000000000004
+        ],
+        "start_mm": [
+          5.0,
+          2.2500000000000004
+        ],
+        "end_mm": [
+          5.0,
+          2.5500000000000003
+        ]
+      },
+      {
+        "side": "RIGHT",
+        "index": 7,
+        "center_mm": [
+          5.0,
+          3.5999999999999996
+        ],
+        "start_mm": [
+          5.0,
+          3.4499999999999997
+        ],
+        "end_mm": [
+          5.0,
+          3.7499999999999996
+        ]
+      }
+    ],
+    "saved_paths_mm": [
+      [
+        [
+          -1.1999999999999997,
+          5.0
+        ],
+        [
+          -1.1999999999999997,
+          4.4784456321200645
+        ],
+        [
+          -0.5824843999132706,
+          2.6450521110815735
+        ],
+        [
+          -0.5824843999132706,
+          1.75
+        ]
+      ],
+      [
+        [
+          -3.5999999999999996,
+          5.0
+        ],
+        [
+          -3.5999999999999996,
+          4.507092405886291
+        ],
+        [
+          -1.4801387412992444,
+          2.3872311471855356
+        ],
+        [
+          -1.4801387412992444,
+          1.75
+        ]
+      ],
+      [
+        [
+          -2.3999999999999995,
+          5.0
+        ],
+        [
+          -2.3999999999999995,
+          4.4784456321200645
+        ],
+        [
+          -1.0599306293503779,
+          2.5495628651941518
+        ],
+        [
+          -1.0599306293503779,
+          1.75
+        ]
+      ],
+      [
+        [
+          1.1999999999999997,
+          5.0
+        ],
+        [
+          1.1999999999999997,
+          4.4784456321200645
+        ],
+        [
+          0.5824843999132706,
+          2.6450521110815735
+        ],
+        [
+          0.5824843999132706,
+          1.75
+        ]
+      ],
+      [
+        [
+          3.5999999999999996,
+          5.0
+        ],
+        [
+          3.5999999999999996,
+          4.507092405886291
+        ],
+        [
+          1.4801387412992444,
+          2.3872311471855356
+        ],
+        [
+          1.4801387412992444,
+          1.75
+        ]
+      ],
+      [
+        [
+          2.3999999999999995,
+          5.0
+        ],
+        [
+          2.3999999999999995,
+          4.4784456321200645
+        ],
+        [
+          1.0599306293503779,
+          2.5495628651941518
+        ],
+        [
+          1.0599306293503779,
+          1.75
+        ]
+      ],
+      [
+        [
+          0.0,
+          5.0
+        ],
+        [
+          0.0,
+          1.75
+        ]
+      ],
+      [
+        [
+          -5.0,
+          -1.1999999999999995
+        ],
+        [
+          -4.4784456321200645,
+          -1.1999999999999995
+        ],
+        [
+          -2.6450521110815735,
+          -0.5824843999132705
+        ],
+        [
+          -1.75,
+          -0.5824843999132705
+        ]
+      ],
+      [
+        [
+          -5.0,
+          -3.599999999999999
+        ],
+        [
+          -4.507092405886291,
+          -3.599999999999999
+        ],
+        [
+          -2.3872311471855356,
+          -1.4801387412992442
+        ],
+        [
+          -1.75,
+          -1.4801387412992444
+        ]
+      ],
+      [
+        [
+          -5.0,
+          -2.399999999999999
+        ],
+        [
+          -4.4784456321200645,
+          -2.399999999999999
+        ],
+        [
+          -2.5495628651941518,
+          -1.0599306293503776
+        ],
+        [
+          -1.75,
+          -1.0599306293503779
+        ]
+      ],
+      [
+        [
+          -5.0,
+          1.2
+        ],
+        [
+          -4.4784456321200645,
+          1.2
+        ],
+        [
+          -2.6450521110815735,
+          0.5824843999132707
+        ],
+        [
+          -1.75,
+          0.5824843999132707
+        ]
+      ],
+      [
+        [
+          -5.0,
+          3.6
+        ],
+        [
+          -4.507092405886291,
+          3.6
+        ],
+        [
+          -2.3872311471855356,
+          1.4801387412992446
+        ],
+        [
+          -1.75,
+          1.4801387412992444
+        ]
+      ],
+      [
+        [
+          -5.0,
+          2.4
+        ],
+        [
+          -4.4784456321200645,
+          2.4
+        ],
+        [
+          -2.5495628651941518,
+          1.059930629350378
+        ],
+        [
+          -1.75,
+          1.0599306293503779
+        ]
+      ],
+      [
+        [
+          -5.0,
+          3.061616997868383e-16
+        ],
+        [
+          -1.75,
+          1.071565949253934e-16
+        ]
+      ],
+      [
+        [
+          1.199999999999999,
+          -5.0
+        ],
+        [
+          1.1999999999999993,
+          -4.4784456321200645
+        ],
+        [
+          0.5824843999132703,
+          -2.6450521110815735
+        ],
+        [
+          0.5824843999132704,
+          -1.75
+        ]
+      ],
+      [
+        [
+          3.599999999999999,
+          -5.0
+        ],
+        [
+          3.599999999999999,
+          -4.507092405886291
+        ],
+        [
+          1.4801387412992442,
+          -2.3872311471855356
+        ],
+        [
+          1.4801387412992442,
+          -1.7500000000000002
+        ]
+      ],
+      [
+        [
+          2.399999999999999,
+          -5.0
+        ],
+        [
+          2.399999999999999,
+          -4.4784456321200645
+        ],
+        [
+          1.0599306293503776,
+          -2.5495628651941518
+        ],
+        [
+          1.0599306293503776,
+          -1.7500000000000002
+        ]
+      ],
+      [
+        [
+          -1.2000000000000004,
+          -5.0
+        ],
+        [
+          -1.2000000000000002,
+          -4.4784456321200645
+        ],
+        [
+          -0.582484399913271,
+          -2.6450521110815735
+        ],
+        [
+          -0.5824843999132708,
+          -1.75
+        ]
+      ],
+      [
+        [
+          -3.6,
+          -5.0
+        ],
+        [
+          -3.6,
+          -4.507092405886291
+        ],
+        [
+          -1.4801387412992446,
+          -2.3872311471855356
+        ],
+        [
+          -1.4801387412992446,
+          -1.7499999999999998
+        ]
+      ],
+      [
+        [
+          -2.4,
+          -5.0
+        ],
+        [
+          -2.4,
+          -4.4784456321200645
+        ],
+        [
+          -1.059930629350378,
+          -2.5495628651941518
+        ],
+        [
+          -1.059930629350378,
+          -1.7499999999999998
+        ]
+      ],
+      [
+        [
+          -6.123233995736766e-16,
+          -5.0
+        ],
+        [
+          -2.143131898507868e-16,
+          -1.75
+        ]
+      ],
+      [
+        [
+          5.0,
+          1.1999999999999988
+        ],
+        [
+          4.4784456321200645,
+          1.1999999999999988
+        ],
+        [
+          2.6450521110815735,
+          0.5824843999132702
+        ],
+        [
+          1.75,
+          0.5824843999132703
+        ]
+      ],
+      [
+        [
+          5.000000000000001,
+          3.5999999999999988
+        ],
+        [
+          4.507092405886292,
+          3.5999999999999988
+        ],
+        [
+          2.387231147185536,
+          1.480138741299244
+        ],
+        [
+          1.7500000000000002,
+          1.4801387412992442
+        ]
+      ],
+      [
+        [
+          5.0,
+          2.3999999999999986
+        ],
+        [
+          4.4784456321200645,
+          2.3999999999999986
+        ],
+        [
+          2.5495628651941518,
+          1.0599306293503774
+        ],
+        [
+          1.7500000000000002,
+          1.0599306293503776
+        ]
+      ],
+      [
+        [
+          5.0,
+          -1.2000000000000006
+        ],
+        [
+          4.4784456321200645,
+          -1.2000000000000006
+        ],
+        [
+          2.6450521110815735,
+          -0.5824843999132711
+        ],
+        [
+          1.75,
+          -0.582484399913271
+        ]
+      ],
+      [
+        [
+          4.999999999999999,
+          -3.6000000000000005
+        ],
+        [
+          4.50709240588629,
+          -3.6000000000000005
+        ],
+        [
+          2.387231147185535,
+          -1.4801387412992448
+        ],
+        [
+          1.7499999999999998,
+          -1.4801387412992446
+        ]
+      ],
+      [
+        [
+          5.0,
+          -2.4000000000000004
+        ],
+        [
+          4.4784456321200645,
+          -2.4000000000000004
+        ],
+        [
+          2.5495628651941518,
+          -1.0599306293503783
+        ],
+        [
+          1.7499999999999998,
+          -1.059930629350378
+        ]
+      ],
+      [
+        [
+          5.0,
+          -9.184850993605148e-16
+        ],
+        [
+          1.75,
+          -3.214697847761802e-16
+        ]
+      ]
+    ],
+    "current_path_mm": [],
+    "preview_point_mm": null,
+    "leg_profile_mm": [
+      [
+        0.0,
+        0.05
+      ],
+      [
+        0.045454545454545456,
+        0.05
+      ],
+      [
+        0.1,
+        0.022727272727272728
+      ],
+      [
+        0.12272727272727273,
+        -0.05
+      ],
+      [
+        0.12272727272727273,
+        -0.1409090909090909
+      ],
+      [
+        0.15,
+        -0.21363636363636362
+      ],
+      [
+        0.18636363636363637,
+        -0.2818181818181818
+      ],
+      [
+        0.2727272727272727,
+        -0.33181818181818185
+      ],
+      [
+        0.4318181818181818,
+        -0.33181818181818185
+      ]
+    ],
+    "wire_profiles": [
+      {
+        "connection_id": "P2_Top_1",
+        "leg_path_index": 2,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 10,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P3_Top_2",
+        "leg_path_index": 3,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P1_Top_3",
+        "leg_path_index": 1,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P7_Top_4",
+        "leg_path_index": 7,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P4_Top_5",
+        "leg_path_index": 4,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P6_Top_6",
+        "leg_path_index": 6,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P5_Top_7",
+        "leg_path_index": 5,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P23_Right_7",
+        "leg_path_index": 23,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P24_Right_6",
+        "leg_path_index": 24,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P22_Right_5",
+        "leg_path_index": 22,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P28_Right_4",
+        "leg_path_index": 28,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P25_Right_3",
+        "leg_path_index": 25,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P27_Right_2",
+        "leg_path_index": 27,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P26_Right_1",
+        "leg_path_index": 26,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P16_Bottom_7",
+        "leg_path_index": 16,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P17_Bottom_6",
+        "leg_path_index": 17,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P15_Bottom_5",
+        "leg_path_index": 15,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P21_Bottom_4",
+        "leg_path_index": 21,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P18_Bottom_3",
+        "leg_path_index": 18,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P20_Bottom_2",
+        "leg_path_index": 20,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P19_Bottom_1",
+        "leg_path_index": 19,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P9_Left_1",
+        "leg_path_index": 9,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P10_Left_2",
+        "leg_path_index": 10,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P8_Left_3",
+        "leg_path_index": 8,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P14_Left_4",
+        "leg_path_index": 14,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P11_Left_5",
+        "leg_path_index": 11,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P13_Left_6",
+        "leg_path_index": 13,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P12_Left_7",
+        "leg_path_index": 12,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      }
+    ],
+    "wire_randomization": {
+      "ball_radius_mean_mm": 5e-05,
+      "ball_radius_std_mm": 5e-06,
+      "ball_height_mean_mm": 0.025,
+      "ball_height_std_mm": 0.0025000000000000005,
+      "arc_height_mean_mm": 0.2,
+      "arc_height_std_mm": 0.05,
+      "arc_xy_noise_mean_mm": 0.0,
+      "arc_xy_noise_std_mm": 0.0,
+      "wire_rise_mean_mm": 0.12,
+      "wire_rise_std_mm": 0.012,
+      "wire_diameter_mean_mm": 0.015,
+      "wire_diameter_std_mm": 0.0015,
+      "wedge_length_mean_mm": 0.18,
+      "wedge_length_std_mm": 0.018,
+      "wedge_width_mean_mm": 0.04,
+      "wedge_width_std_mm": 0.004,
+      "wedge_thickness_mean_mm": 0.01,
+      "wedge_thickness_std_mm": 0.001,
+      "wedge_approach_mean_mm": 0.18,
+      "wedge_approach_std_mm": 0.018,
+      "wedge_tail_mean_mm": 0.07,
+      "wedge_tail_std_mm": 0.007000000000000001
+    }
+  },
+  "silicon_die_and_bond_regions": {
+    "silicon_die_width_mm": 2.4,
+    "silicon_die_height_mm": 2.4,
+    "silicon_die_thickness_mm": 0.15,
+    "die_clearance_mm": 0.01,
+    "wire_contact_clearance_mm": 0.01,
+    "helper_region_hover_mm": 0.01,
+    "bond_end_region_size_mm": 0.15,
+    "bond_end_region_offset_mm": 0.15,
+    "bond_start_region_size_mm": 0.1,
+    "bond_start_region_gap_mm": 0.15,
+    "bond_start_region_offset_mm": 0.03,
+    "bond_start_region_counts": {
+      "top": 7,
+      "bottom": 7,
+      "left": 7,
+      "right": 7
+    }
+  },
+  "wire_bonding": {
+    "wire_profiles": [
+      {
+        "connection_id": "P2_Top_1",
+        "leg_path_index": 2,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 10,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P3_Top_2",
+        "leg_path_index": 3,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P1_Top_3",
+        "leg_path_index": 1,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P7_Top_4",
+        "leg_path_index": 7,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P4_Top_5",
+        "leg_path_index": 4,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P6_Top_6",
+        "leg_path_index": 6,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P5_Top_7",
+        "leg_path_index": 5,
+        "lead_side_name": "Top",
+        "die_side_name": "Top",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P23_Right_7",
+        "leg_path_index": 23,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P24_Right_6",
+        "leg_path_index": 24,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P22_Right_5",
+        "leg_path_index": 22,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P28_Right_4",
+        "leg_path_index": 28,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P25_Right_3",
+        "leg_path_index": 25,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P27_Right_2",
+        "leg_path_index": 27,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P26_Right_1",
+        "leg_path_index": 26,
+        "lead_side_name": "Right",
+        "die_side_name": "Right",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P16_Bottom_7",
+        "leg_path_index": 16,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P17_Bottom_6",
+        "leg_path_index": 17,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P15_Bottom_5",
+        "leg_path_index": 15,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P21_Bottom_4",
+        "leg_path_index": 21,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P18_Bottom_3",
+        "leg_path_index": 18,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P20_Bottom_2",
+        "leg_path_index": 20,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P19_Bottom_1",
+        "leg_path_index": 19,
+        "lead_side_name": "Bottom",
+        "die_side_name": "Bottom",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P9_Left_1",
+        "leg_path_index": 9,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 1,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P10_Left_2",
+        "leg_path_index": 10,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 2,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P8_Left_3",
+        "leg_path_index": 8,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 3,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P14_Left_4",
+        "leg_path_index": 14,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 4,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P11_Left_5",
+        "leg_path_index": 11,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 5,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P13_Left_6",
+        "leg_path_index": 13,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 6,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      },
+      {
+        "connection_id": "P12_Left_7",
+        "leg_path_index": 12,
+        "lead_side_name": "Left",
+        "die_side_name": "Left",
+        "die_section_index": 7,
+        "arc_height_mm": 0.2,
+        "arc_xy_noise_mm": 0.0,
+        "wire_rise_z_mm": 0.12,
+        "wire_diameter_mm": 0.015,
+        "wire_arc_point_spacing_mm": 0.08,
+        "wire_tube_side_count": 10,
+        "ball_bond_diameter_mm": 0.02,
+        "ball_bond_length_mm": 0.025,
+        "ball_bond_revolution_steps": 24,
+        "wedge_bond_length_mm": 0.18,
+        "wedge_bond_width_mm": 0.04,
+        "wedge_bond_thickness_mm": 0.01,
+        "wedge_approach_run_mm": 0.18,
+        "wedge_tail_mm": 0.07
+      }
+    ],
+    "wire_randomization": {
+      "ball_radius_mean_mm": 5e-05,
+      "ball_radius_std_mm": 5e-06,
+      "ball_height_mean_mm": 0.025,
+      "ball_height_std_mm": 0.0025000000000000005,
+      "arc_height_mean_mm": 0.2,
+      "arc_height_std_mm": 0.05,
+      "arc_xy_noise_mean_mm": 0.0,
+      "arc_xy_noise_std_mm": 0.0,
+      "wire_rise_mean_mm": 0.12,
+      "wire_rise_std_mm": 0.012,
+      "wire_diameter_mean_mm": 0.015,
+      "wire_diameter_std_mm": 0.0015,
+      "wedge_length_mean_mm": 0.18,
+      "wedge_length_std_mm": 0.018,
+      "wedge_width_mean_mm": 0.04,
+      "wedge_width_std_mm": 0.004,
+      "wedge_thickness_mean_mm": 0.01,
+      "wedge_thickness_std_mm": 0.001,
+      "wedge_approach_mean_mm": 0.18,
+      "wedge_approach_std_mm": 0.018,
+      "wedge_tail_mean_mm": 0.07,
+      "wedge_tail_std_mm": 0.007000000000000001
+    }
+  },
+  "scaled_outer_model": {
+    "outer_model_scale_percent": 0.0
+  },
+  "encapsulation": {
+    "encapsulation_width_mm": 9.5,
+    "encapsulation_length_mm": 9.5,
+    "encapsulation_negative_extrusion_mm": 0.2,
+    "encapsulation_positive_extrusion_mm": 0.7,
+    "step5_viewer_visibility": {
+      "lead_frame_paths": true,
+      "centered_die_compartment": true,
+      "silicon_die": true,
+      "bond_end_regions": true,
+      "bond_start_regions": true,
+      "bond_assemblies": true,
+      "scaled_outer_model": true,
+      "encapsulation": true,
+      "legs": true
+    }
+  },
+  "leg_design": {
+    "leg_profile_mm": [
+      [
+        0.0,
+        0.05
+      ],
+      [
+        0.045454545454545456,
+        0.05
+      ],
+      [
+        0.1,
+        0.022727272727272728
+      ],
+      [
+        0.12272727272727273,
+        -0.05
+      ],
+      [
+        0.12272727272727273,
+        -0.1409090909090909
+      ],
+      [
+        0.15,
+        -0.21363636363636362
+      ],
+      [
+        0.18636363636363637,
+        -0.2818181818181818
+      ],
+      [
+        0.2727272727272727,
+        -0.33181818181818185
+      ],
+      [
+        0.4318181818181818,
+        -0.33181818181818185
+      ]
+    ]
+  },
+  "export_stls": {
+    "step7_export_selection": {
+      "lead_frame": true,
+      "wire": true,
+      "encapsulation": true,
+      "silicon_die": true,
+      "all": true
+    }
+  }
+}

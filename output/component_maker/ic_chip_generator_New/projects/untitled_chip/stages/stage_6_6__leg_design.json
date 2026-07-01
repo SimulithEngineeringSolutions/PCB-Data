@@ -1,6 +1,6 @@
 {
-  "saved_stage_index": 3,
-  "saved_stage_title": "4. Scaled Outer Model",
+  "saved_stage_index": 5,
+  "saved_stage_title": "6. Leg Design",
   "current_step_index": 0,
   "current_step_title": "1. Lead Frame Design",
   "status_message": "Set the leadframe size and side counts, then click a guide midpoint to start drawing.",
@@ -277,5 +277,42 @@
   },
   "scaled_outer_model": {
     "outer_model_scale_percent": 0.1
+  },
+  "encapsulation": {
+    "encapsulation_width_mm": 7.0,
+    "encapsulation_length_mm": 7.0,
+    "encapsulation_negative_extrusion_mm": 0.0,
+    "encapsulation_positive_extrusion_mm": 0.6,
+    "step5_viewer_visibility": {
+      "lead_frame_paths": true,
+      "centered_die_compartment": true,
+      "silicon_die": true,
+      "bond_end_regions": true,
+      "bond_start_regions": true,
+      "bond_assemblies": true,
+      "scaled_outer_model": true,
+      "encapsulation": true,
+      "legs": true
+    }
+  },
+  "leg_design": {
+    "leg_profile_mm": [
+      [
+        0.0,
+        0.1
+      ],
+      [
+        0.35,
+        0.1
+      ],
+      [
+        0.9,
+        -0.25
+      ],
+      [
+        1.4,
+        -0.45
+      ]
+    ]
   }
 }

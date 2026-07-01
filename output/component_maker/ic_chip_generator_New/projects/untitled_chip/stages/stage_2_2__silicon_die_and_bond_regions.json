@@ -44,6 +44,9 @@
       0.0,
       -2.0
     ],
+    "die_clearance_mm": 0.001,
+    "wire_contact_clearance_mm": 0.001,
+    "helper_region_hover_mm": 0.001,
     "outer_model_scale_percent": 0.1,
     "encapsulation_width_mm": 7.0,
     "encapsulation_length_mm": 7.0,
@@ -51,11 +54,21 @@
     "encapsulation_positive_extrusion_mm": 0.6,
     "step5_viewer_visibility": {
       "lead_frame_paths": true,
-      "centered_die_compartment": false,
+      "centered_die_compartment": true,
       "silicon_die": true,
+      "bond_end_regions": true,
+      "bond_start_regions": true,
       "bond_assemblies": true,
       "scaled_outer_model": true,
-      "encapsulation": true
+      "encapsulation": true,
+      "legs": true
+    },
+    "step7_export_selection": {
+      "lead_frame": true,
+      "wire": true,
+      "encapsulation": true,
+      "silicon_die": true,
+      "all": true
     },
     "silicon_die_width_mm": 2.4,
     "silicon_die_height_mm": 2.4,
@@ -172,6 +185,24 @@
     "saved_paths_mm": [],
     "current_path_mm": [],
     "preview_point_mm": null,
+    "leg_profile_mm": [
+      [
+        0.0,
+        0.1
+      ],
+      [
+        0.35,
+        0.1
+      ],
+      [
+        0.9,
+        -0.25
+      ],
+      [
+        1.4,
+        -0.45
+      ]
+    ],
     "wire_profiles": [],
     "wire_randomization": {
       "ball_radius_mean_mm": 0.06,
@@ -202,6 +233,9 @@
     "silicon_die_width_mm": 2.4,
     "silicon_die_height_mm": 2.4,
     "silicon_die_thickness_mm": 0.15,
+    "die_clearance_mm": 0.001,
+    "wire_contact_clearance_mm": 0.001,
+    "helper_region_hover_mm": 0.001,
     "bond_end_region_size_mm": 0.2,
     "bond_end_region_offset_mm": 0.0,
     "bond_start_region_size_mm": 0.2,

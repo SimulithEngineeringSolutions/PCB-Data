@@ -1,15 +1,15 @@
 {
   "saved_stage_index": 3,
   "saved_stage_title": "4. Scaled Outer Model",
-  "current_step_index": 4,
-  "current_step_title": "5. Encapsulation",
-  "status_message": "5. Encapsulation active.",
+  "current_step_index": 6,
+  "current_step_title": "7. Export STLs",
+  "status_message": "7. Export STLs active.",
   "lead_frame_design": {
     "project_name": "SOIC-1",
     "project_dir": "C:\\Users\\Ryant\\Documents\\GitHub\\PCB Data\\output\\component_maker\\ic_chip_generator_New\\projects\\soic_1",
-    "current_step_index": 4,
-    "current_step_title": "5. Encapsulation",
-    "status_message": "5. Encapsulation active.",
+    "current_step_index": 6,
+    "current_step_title": "7. Export STLs",
+    "status_message": "7. Export STLs active.",
     "outline_x_mm": 4.6,
     "outline_y_mm": 4.9,
     "thickness_z_mm": 0.25,
@@ -45,8 +45,8 @@
       0.0
     ],
     "outer_model_scale_percent": 0.1,
-    "encapsulation_width_mm": 4.9,
-    "encapsulation_length_mm": 3.9,
+    "encapsulation_width_mm": 4.6,
+    "encapsulation_length_mm": 4.3,
     "encapsulation_negative_extrusion_mm": 0.7,
     "encapsulation_positive_extrusion_mm": 0.7,
     "step5_viewer_visibility": {
@@ -55,7 +55,15 @@
       "silicon_die": true,
       "bond_assemblies": true,
       "scaled_outer_model": true,
-      "encapsulation": true
+      "encapsulation": true,
+      "legs": true
+    },
+    "step7_export_selection": {
+      "lead_frame": true,
+      "wire": true,
+      "encapsulation": true,
+      "silicon_die": true,
+      "all": true
     },
     "silicon_die_width_mm": 1.2,
     "silicon_die_height_mm": 1.2,
@@ -349,6 +357,40 @@
     ],
     "current_path_mm": [],
     "preview_point_mm": null,
+    "leg_profile_mm": [
+      [
+        0.0,
+        0.125
+      ],
+      [
+        0.05,
+        0.125
+      ],
+      [
+        0.16363636363636364,
+        0.0
+      ],
+      [
+        0.2318181818181818,
+        -0.21818181818181817
+      ],
+      [
+        0.2590909090909091,
+        -0.41818181818181815
+      ],
+      [
+        0.35454545454545455,
+        -0.5590909090909091
+      ],
+      [
+        0.5272727272727272,
+        -0.65
+      ],
+      [
+        0.8181818181818182,
+        -0.65
+      ]
+    ],
     "wire_profiles": [
       {
         "connection_id": "P3_Left_1",
